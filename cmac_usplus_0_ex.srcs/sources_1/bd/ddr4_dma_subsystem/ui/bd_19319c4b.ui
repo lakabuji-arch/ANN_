@@ -1,0 +1,51 @@
+{
+   "ActiveEmotionalView":"Default View",
+   "Default View_ScaleFactor":"1.70588",
+   "Default View_TopLeft":"222,-13",
+   "ExpandedHierarchyInLayout":"",
+   "guistr":"# # String gsaved with Nlview 7.8.0 2024-04-26 e1825d835c VDI=44 GEI=38 GUI=JA:21.0
+#  -string -flagsOSRD
+preplace port C0_SYS_CLK_0 -pg 1 -lvl 0 -x 0 -y 130 -defaultsOSRD
+preplace port C0_DDR4_0 -pg 1 -lvl 3 -x 1080 -y 110 -defaultsOSRD
+preplace port S_AXIS_S2MM_0 -pg 1 -lvl 0 -x 0 -y 350 -defaultsOSRD
+preplace port M_AXIS_MM2S_0 -pg 1 -lvl 3 -x 1080 -y 470 -defaultsOSRD
+preplace port S_AXIS_S2MM_CMD_0 -pg 1 -lvl 0 -x 0 -y 370 -defaultsOSRD
+preplace port S_AXIS_MM2S_CMD_0 -pg 1 -lvl 0 -x 0 -y 390 -defaultsOSRD
+preplace port M_AXIS_S2MM_STS_0 -pg 1 -lvl 3 -x 1080 -y 430 -defaultsOSRD
+preplace port M_AXIS_MM2S_STS_0 -pg 1 -lvl 3 -x 1080 -y 450 -defaultsOSRD
+preplace port port-id_sys_rst -pg 1 -lvl 0 -x 0 -y 280 -defaultsOSRD
+preplace port port-id_c0_init_calib_complete_0 -pg 1 -lvl 3 -x 1080 -y 130 -defaultsOSRD
+preplace port port-id_mm2s_err_0 -pg 1 -lvl 3 -x 1080 -y 490 -defaultsOSRD
+preplace port port-id_s2mm_err_0 -pg 1 -lvl 3 -x 1080 -y 510 -defaultsOSRD
+preplace port port-id_c0_ddr4_ui_clk -pg 1 -lvl 3 -x 1080 -y 240 -defaultsOSRD
+preplace inst smartconnect_0 -pg 1 -lvl 1 -x 460 -y -30 -defaultsOSRD
+preplace inst ddr4_0 -pg 1 -lvl 1 -x 460 -y 160 -defaultsOSRD
+preplace inst axi_datamover_0 -pg 1 -lvl 1 -x 460 -y 450 -defaultsOSRD
+preplace inst proc_sys_reset_0 -pg 1 -lvl 2 -x 880 -y 240 -defaultsOSRD
+preplace netloc axi_datamover_0_mm2s_err 1 1 2 NJ 490 NJ
+preplace netloc axi_datamover_0_s2mm_err 1 1 2 NJ 510 NJ
+preplace netloc ddr4_0_c0_ddr4_ui_clk 1 0 3 230 -150 690 140 1060
+preplace netloc ddr4_0_c0_ddr4_ui_clk_sync_rst 1 1 1 690 210n
+preplace netloc ddr4_0_c0_init_calib_complete 1 1 2 NJ 130 NJ
+preplace netloc proc_sys_reset_0_interconnect_aresetn 1 0 3 220 -160 NJ -160 1050
+preplace netloc proc_sys_reset_0_peripheral_aresetn 1 0 3 260 290 690J 340 1050
+preplace netloc sys_rst_1 1 0 1 20 190n
+preplace netloc C0_SYS_CLK_0_1 1 0 1 N 130
+preplace netloc S_AXIS_MM2S_CMD_0_1 1 0 1 N 390
+preplace netloc S_AXIS_S2MM_0_1 1 0 1 N 350
+preplace netloc S_AXIS_S2MM_CMD_0_1 1 0 1 N 370
+preplace netloc axi_datamover_0_M_AXIS_MM2S 1 1 2 NJ 470 NJ
+preplace netloc axi_datamover_0_M_AXIS_MM2S_STS 1 1 2 NJ 450 NJ
+preplace netloc axi_datamover_0_M_AXIS_S2MM_STS 1 1 2 NJ 430 NJ
+preplace netloc axi_datamover_0_M_AXI_MM2S 1 0 2 240 -140 670
+preplace netloc axi_datamover_0_M_AXI_S2MM 1 0 2 250 -130 680
+preplace netloc ddr4_0_C0_DDR4 1 1 2 NJ 110 NJ
+preplace netloc smartconnect_0_M00_AXI 1 0 2 260 -120 660
+levelinfo -pg 1 0 460 880 1080
+pagesize -pg 1 -db -bbox -sgen -320 -200 1310 1520
+"
+}
+{
+   "da_axi4_cnt":"4",
+   "da_board_cnt":"13"
+}
