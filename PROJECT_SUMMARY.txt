@@ -1,0 +1,660 @@
+================================================================================
+  XCKU5P 100G CMAC + DDR4 Store-and-Forward 系统 (UDP 命令控制)
+  更新日期: 2026-05-12
+================================================================================
+
+
+════════════════════════════════════════════════════════════════════════════════
+一、最终目标
+════════════════════════════════════════════════════════════════════════════════
+
+  ┌──────────────────────────────────────────────────────────────────────┐
+  │                     FPGA 数据采集卡 (XCVU5P)                          │
+  │                                                                      │
+  │  ADC 双通道                  100G CMAC            PCIe x4 Gen3       │
+  │  1.5GSPS / 8bit  ┌──────┐   UDP 命令控制  ┌──────┐   8.0GT/s        │
+  │  LVDS 接口  ────→│ DDR4 │←───────────────→│ 上行 │←──────────→ PC   │
+  │                  │ 缓存 │   状态/录放/    │ 端口 │   数据上传        │
+  │                  └──────┘   基址管理      └──────┘                   │
+  │                     │                        │                       │
+  │                     ▼                        ▼                       │
+  │               4×10G SFP+              实时信号处理                    │
+  │             FPGA 间互联               (DDC/滤波/...)                  │
+  │                                                                      │
+  └──────────────────────────────────────────────────────────────────────┘
+
+  数据流:
+    ADC → FPGA → DDR4 (环形缓冲) → PCIe DMA → PC 硬盘
+    PC → 100G UDP → FPGA → DDR4 → 100G → PC  (录放回读, 当前已跑通)
+
+  两步走路线:
+    Phase 1 (当前) — 100G 验证平台: CMAC + UDP 协议栈 + DDR4 录放控制
+    Phase 2 (新板子) — 数据采集卡: ADC前端 + PCIe输出 + 4×SFP互联 + DSP流水线
+
+
+════════════════════════════════════════════════════════════════════════════════
+二、Phase 1 — 当前工程架构
+════════════════════════════════════════════════════════════════════════════════
+
+  ┌──────────────────────────────────────────────────────────────────────┐
+  │                         fpga_top_100g                                │
+  │                                                                      │
+  │  时钟域:                                                             │
+  │    50MHz (E18) ──→ clk_wiz ──→ 100MHz init_clk (AXI/GT初始化)       │
+  │    156.25MHz (T7) ──→ CMAC GT ──→ 322MHz usr_mac_clk (数据面)       │
+  │    DDR4 ref clk ──→ DDR4 MIG ──→ 333MHz c0_ddr4_ui_clk (存储面)     │
+  │                                                                      │
+  │  ┌────────────────────────────────────────────┐                      │
+  │  │           cmac_100g_wrapper                 │                      │
+  │  │                                             │                      │
+  │  │  CMAC RX → net_rx → rx_demux:               │                      │
+  │  │    Ch0 (ARP)  → arp_responder               │                      │
+  │  │    Ch1 (ICMP) → icmp_responder              │                      │
+  │  │    Ch2 (UDP:8000) → deframer → S_AXIS_RX (数据面)                │
+  │  │    Ch3 (UDP:8001) → udp_cmd_parser (控制面)                      │
+  │  │                                             │                      │
+  │  │  TX:                                         │                      │
+  │  │    arbiter(S0:ARP, S1:ICMP, S2:UDP, S3:CMD) → CMAC TX            │
+  │  │    M_AXIS_TX ← framer, cmd_parser 独立输入    │                      │
+  │  └──────────────────┬─────────────────────────┘                      │
+  │                     │ CDC (322↔333)                                   │
+  │  ┌──────────────────┴─────────────────────────┐                      │
+  │  │           ddr4_subsystem_top                │                      │
+  │  │  RX CDC FIFO (Async) → BD: S2MM → DDR4    │                      │
+  │  │  DDR4 → BD: MM2S → TX Packet Mode FIFO    │                      │
+  │  └────────────────────────────────────────────┘                      │
+  │                                                                      │
+  │  datamover_ctrl: 外部 ext_rec_active/ext_play_active 控制录/放       │
+  │  命令 0x06: ctrl_soft_reset 软复位 datamover 状态                    │
+  └──────────────────────────────────────────────────────────────────────┘
+
+  数据面 (默认 STOP, 命令控制):
+    NIC → 100G → CMAC RX → rx_demux(Ch2:8000) → deframer
+      → RX CDC FIFO → S2MM → DDR4 → MM2S
+      → TX Packet Mode FIFO → framer → arbiter(S2) → CMAC TX → NIC
+
+  控制面 (UDP 8001):
+    PC → 100G → CMAC RX → rx_demux(Ch3:8001) → cmd_parser
+      → CDC → datamover_ctrl (START/STOP 录流/回放/软复位)
+      → 响应包(源端口回传) → arbiter(S3) → CMAC TX → PC
+
+
+════════════════════════════════════════════════════════════════════════════════
+三、源文件清单
+════════════════════════════════════════════════════════════════════════════════
+
+  sources_1/new/ (14个):
+  ├── fpga_top_100g.sv             顶层模块 + 时钟域 + LED诊断
+  ├── cmac_100g_wrapper.sv         CMAC协议栈封装 (MAC+ARP+ICMP+UDP+CMD)
+  ├── cmac_axi_master.sv           CMAC AXI初始化状态机 (RS-FEC使能)
+  ├── rx_demux.sv                  RX 协议分类器 (ARP/ICMP/UDP:8000/UDP:8001)
+  ├── arp_responder.sv             ARP 自动应答
+  ├── icmp_responder.sv            ICMP Ping 应答 (增量校验和)
+  ├── udp_100g_deframer_pro.sv     UDP解帧 (42字节头剥离 + tkeep掩码)
+  ├── udp_100g_framer_pro.sv       UDP组帧 (动态长度 + 预计算)
+  ├── udp_cmd_parser.sv            UDP命令解析器 (端口8001, 源端口回传)
+  ├── axis_tx_arbiter.sv           TX仲裁 (ARP>ICMP>UDP>CMD, Skid Buffer)
+  ├── udp_100g_config_slave.sv     AXI4-Lite配置/统计寄存器
+  ├── udp_100g_statistics.sv       统计计数器
+  ├── datamover_ctrl.sv            DataMover S2MM/MM2S 命令调度
+  └── ddr4_subsystem_top.sv        DDR4子系统 (CDC FIFO + BD wrapper)
+
+  测试脚本 scripts/ (7个):
+  ├── pc_mellanox_100g_fec.ps1     Mellanox ConnectX-5 100G RS-FEC 配置
+  ├── fpga_test.ps1                命令协议基础测试 (GET_STATUS/START/STOP)
+  ├── test_rec_play.ps1            录流→回放全流程测试
+  ├── test_data_loopback.ps1       数据环回测试
+  ├── diag_simple.ps1              简化诊断 (手动验证用)
+  ├── diag_mm2s.ps1                MM2S 路径专项诊断
+  └── full_test.ps1                Phase 1 全方位回归测试 (13项自动化)
+
+  sim_1/new/ (8个):
+  ├── dma_ddr4_sys_wrapper.sv      仿真顶层 wrapper
+  ├── axi_ram_slave.sv             AXI RAM 从机 (仿真用)
+  ├── tb_bd_datamover.sv           BD DataMover 边界测试
+  ├── tb_bd_functional.sv          BD 功能测试
+  ├── tb_system_loopback.sv        系统环回测试
+  ├── tb_tx_reset_alignment_force.sv  TX复位对齐测试
+  ├── tb_udp_deframer_pre_ddr.sv   Deframer 单独测试
+  └── tb_udp_framer_post_ddr.sv    Framer 单独测试
+
+  constrs_1/new/ (1个):
+  └── cmac.xdc                     时钟/引脚/时序约束
+
+
+════════════════════════════════════════════════════════════════════════════════
+四、UDP 命令协议
+════════════════════════════════════════════════════════════════════════════════
+
+  通信端口:
+    命令包: PC → FPGA UDP 端口 8001
+    数据包: PC → FPGA UDP 端口 8000 (录流输入) / FPGA → PC UDP 端口 8000 (回放输出)
+    响应包: FPGA → PC, src_port=8001, dst_port=请求方源端口
+
+  ─── 命令包格式 (PC → FPGA, UDP 8001, 固定 6 字节) ───
+    Byte 0:     CMD   命令码 (0x01~0x06)
+    Byte 1:     DIR   预留 (填 0x00)
+    Byte 2~5:   ADDR  DDR4 起始地址, big-endian (仅 START_REC/START_PLAY 时生效)
+    Byte 6~9:   SIZE  预留 (填 0x00)
+
+  ─── 状态响应格式 (FPGA → PC, UDP 8001 → 请求方端口, 固定 14 字节) ───
+    Byte 0:     STAT       0=OK / 1=BUSY / 2=ERR
+    Byte 1:     S2MM_HI    S2MM 命令计数 [15:8]
+    Byte 2:     S2MM_LO    S2MM 命令计数 [7:0]
+    Byte 3:     MM2S_HI    MM2S 命令计数 [15:8]
+    Byte 4:     MM2S_LO    MM2S 命令计数 [7:0]
+    Byte 5:     RX_W_HI    RX CDC FIFO 水位 [11:8] (上 4bit=0)
+    Byte 6:     RX_W_LO    RX CDC FIFO 水位 [7:0]
+    Byte 7:     TX_W_HI    TX CDC FIFO 水位 [11:8] (上 4bit=0)
+    Byte 8:     TX_W_LO    TX CDC FIFO 水位 [7:0]
+    Byte 9:     ERR        S2MM_err | MM2S_err
+
+  ─── 多字节字段解码 (大端序) ───
+    S2MM_CNT   = (Byte1 << 8) | Byte2
+    MM2S_CNT   = (Byte3 << 8) | Byte4
+    RX_WATER   = (Byte5 << 8) | Byte6
+    TX_WATER   = (Byte7 << 8) | Byte8
+
+  ════════════════════════════════════════════════════════════════════
+  命令定义
+  ════════════════════════════════════════════════════════════════════
+
+  ┌────────┬──────────────┬──────────────────────────────────────────────┐
+  │ 命令码 │ 名称         │ 发送数据 / 行为 / 响应                       │
+  ├────────┼──────────────┼──────────────────────────────────────────────┤
+  │        │              │ PC → FPGA:8001                               │
+  │ 0x01   │ START_REC    │ [01 00 00 00 00 00]                          │
+  │        │              │ 使能 S2MM 录流。此后 100G RX 的 UDP 8000      │
+  │        │              │ 数据自动写入 DDR4。若 ADDR 非零则从指定地址   │
+  │        │              │ 开始写, 否则从 0x0000_0000 开始。              │
+  │        │              │ 响应: STAT=S2MM=MM2S=0 (写还没开始)           │
+  ├────────┼──────────────┼──────────────────────────────────────────────┤
+  │        │              │ PC → FPGA:8001                               │
+  │ 0x02   │ STOP_REC     │ [02 00 00 00 00 00]                          │
+  │        │              │ 关闭 S2MM。后续 RX 数据不再写入 DDR4。         │
+  │        │              │ 响应: STAT=0, S2MM=已写入命令数, MM2S=上次值  │
+  ├────────┼──────────────┼──────────────────────────────────────────────┤
+  │        │              │ PC → FPGA:8001                               │
+  │ 0x03   │ START_PLAY   │ [03 00 00 00 00 00]                          │
+  │        │              │ 使能 MM2S 回放。FPGA 从 DDR4 读出上一次录流    │
+  │        │              │ 的数据, 经 framer 组帧后从 100G TX 发出。      │
+  │        │              │ 输出包: src=FPGA:8000 → dst=PC:8000           │
+  │        │              │ 响应: STAT=0, S2MM=不变, MM2S=0 (读还没开始)  │
+  ├────────┼──────────────┼──────────────────────────────────────────────┤
+  │        │              │ PC → FPGA:8001                               │
+  │ 0x04   │ STOP_PLAY    │ [04 00 00 00 00 00]                          │
+  │        │              │ 关闭 MM2S。停止 DDR4 读出。                    │
+  │        │              │ 响应: STAT=0, S2MM/MM2S=最终值                │
+  ├────────┼──────────────┼──────────────────────────────────────────────┤
+  │        │              │ PC → FPGA:8001                               │
+  │ 0x05   │ GET_STATUS   │ [05 00 00 00 00 00]                          │
+  │        │              │ 查询当前 S2MM/MM2S 计数 + FIFO 水位 + 错误。   │
+  │        │              │ 仅查询, 不改变任何状态。                       │
+  │        │              │ 响应: 含全部 10 字节状态字段                   │
+  ├────────┼──────────────┼──────────────────────────────────────────────┤
+  │        │              │ PC → FPGA:8001                               │
+  │ 0x06   │ SOFT_RESET   │ [06 00 00 00 00 00]                          │
+  │        │              │ 软复位 datamover_ctrl:                        │
+  │        │              │   清空 S2MM/MM2S 计数器 → 0                   │
+  │        │              │   清空 pending_fifo + lb_fifo                 │
+  │        │              │   rec_active/play_active → 0 (等效 STOP)      │
+  │        │              │   复位 datamover 状态机 + 地址指针             │
+  │        │              │ 不影响 CMAC 链路、DDR4 校准。                  │
+  │        │              │ 响应: STAT=0, S2MM=0, MM2S=0                  │
+  └────────┴──────────────┴──────────────────────────────────────────────┘
+
+  ════════════════════════════════════════════════════════════════════
+  典型控制流程
+  ════════════════════════════════════════════════════════════════════
+
+  ① 上电启动
+     FPGA 上电 → CMAC 锁 GT → DDR4 校准 (~1s) → LED[2] 快闪停止 → 就绪
+     初始状态: rec_active=0, play_active=0 → S2MM/MM2S 均关闭
+     此时发到 UDP 8000 的数据不会写入 DDR4
+
+  ② 录流 (数据从 100G → DDR4)
+     ┌─────────────────────────────────────────────────────┐
+     │ PC → FPGA:8001  [01 00 00 00 00 00]   START_REC    │
+     │ FPGA → PC       响应 STAT=0                         │
+     │                                                     │
+     │ PC → FPGA:8000  任意 UDP 数据包 (连续发送)           │
+     │                   → LED[2] 闪烁                     │
+     │                                                     │
+     │ PC → FPGA:8001  [05 00 00 00 00 00]   GET_STATUS   │
+     │ FPGA → PC       响应 S2MM=N (>0), MM2S=0            │
+     │                                                     │
+     │ PC → FPGA:8001  [02 00 00 00 00 00]   STOP_REC     │
+     │ FPGA → PC       响应 STAT=0                         │
+     └─────────────────────────────────────────────────────┘
+
+  ③ 回放 (数据从 DDR4 → 100G)
+     ┌─────────────────────────────────────────────────────┐
+     │ PC → FPGA:8001  [03 00 00 00 00 00]   START_PLAY   │
+     │ FPGA → PC       响应 STAT=0                         │
+     │                   → LED[3] 闪烁                     │
+     │                   → Wireshark 可见 FPGA:8000→PC 包  │
+     │                                                     │
+     │ PC → FPGA:8001  [05 00 00 00 00 00]   GET_STATUS   │
+     │ FPGA → PC       响应 S2MM=N, MM2S=N (录放一致)      │
+     │                                                     │
+     │ PC → FPGA:8001  [04 00 00 00 00 00]   STOP_PLAY    │
+     │ FPGA → PC       响应 STAT=0                         │
+     └─────────────────────────────────────────────────────┘
+
+  ④ 完整录→放→复位 (典型测试流程)
+     ┌─────────────────────────────────────────────────────┐
+     │ [05] GET_STATUS   → 确认 S2MM=0, MM2S=0             │
+     │ [01] START_REC    → 使能写入                        │
+     │ (PC 发 20 个 UDP 包到 FPGA:8000)                    │
+     │ [05] GET_STATUS   → 确认 S2MM=20                    │
+     │ [02] STOP_REC     → 停止写入                        │
+     │ [03] START_PLAY   → 开始回放                        │
+     │ [05] GET_STATUS   → 确认 MM2S=20                    │
+     │ [04] STOP_PLAY    → 停止回放                        │
+     │ [06] SOFT_RESET   → 清空状态, 回到初始              │
+     │ [05] GET_STATUS   → 确认 S2MM=0, MM2S=0             │
+     └─────────────────────────────────────────────────────┘
+
+  ⑤ 录流过程中查询 (不停止)
+     ┌─────────────────────────────────────────────────────┐
+     │ [01] START_REC                                      │
+     │ (发数据...)                                         │
+     │ [05] GET_STATUS  → S2MM 递增中, RX_WATER 变化       │
+     │ (继续发数据...)                                     │
+     │ [05] GET_STATUS  → S2MM 继续递增                    │
+     │ [02] STOP_REC                                       │
+     └─────────────────────────────────────────────────────┘
+
+  ════════════════════════════════════════════════════════════════════
+  状态机转换规则
+  ════════════════════════════════════════════════════════════════════
+
+                                    ┌──────────┐
+                    ┌──────────────→│  IDLE    │←──────────────────┐
+                    │  SOFT_RESET   │ rec=0    │   SOFT_RESET      │
+                    │  (0x06)       │ play=0   │   (0x06)          │
+                    │               └────┬─────┘                   │
+                    │                    │                         │
+                    │         START_REC  │  START_PLAY             │
+                    │         (0x01)     │  (0x03)                 │
+                    │                    ↓                         │
+                    │               ┌──────────┐                  │
+                    │               │ RECORDING│                  │
+                    │               │ rec=1    │                  │
+                    │               └────┬─────┘                  │
+                    │                    │                         │
+                    │         STOP_REC   │  STOP_PLAY              │
+                    │         (0x02)     │  (0x04)                 │
+                    │                    ↓                         │
+                    │               ┌──────────┐                  │
+                    └───────────────│ PLAYBACK │──────────────────┘
+                                    │ play=1   │
+                                    └──────────┘
+
+  GET_STATUS (0x05) 在任何状态均可发送, 不改变状态机。
+
+  ════════════════════════════════════════════════════════════════════
+  注意事项
+  ════════════════════════════════════════════════════════════════════
+
+  【防火墙】FPGA 响应包 src_port 固定为 8001。PC 必须先发包到
+    FPGA:8001, 防火墙才会允许 FPGA:8001→PC 的回包通过。
+
+  【CDC 延迟】S2MM/MM2S 计数经过 Gray 码跨时钟域 (333→322MHz),
+    查询结果比实际硬件状态滞后约 5 个周期 (~15ns), 不影响功能。
+
+  【DDR4 地址】ADDR 为 big-endian 32-bit 字节地址。当前 datamover_ctrl
+    内部自动递增 0x4000 (16KB) 步长, 循环使用 0x0000_0000 ~ 0x3FFF_0000。
+
+  【录放配对】回放复用的是上一次录流写入的 DDR4 地址和数据量,
+    STOP_REC 后的 pending_fifo/lb_fifo 内容决定了 MM2S 读出范围。
+
+
+════════════════════════════════════════════════════════════════════════════════
+五、关键设计要点
+════════════════════════════════════════════════════════════════════════════════
+
+  【时钟域】
+    usr_mac_clk   (322.26MHz) — CMAC 数据面，512-bit AXI-Stream
+    c0_ddr4_ui_clk (333.25MHz) — DDR4 控制器用户接口
+    init_clk      (100MHz)    — AXI 初始化 + GT 配置
+    三个时钟域通过 set_clock_groups -asynchronous 声明为异步
+
+  【复位网络】
+    sys_rst → usr_mac_clk 域: 2-FF ASYNC_REG 同步器
+    DDR4 域复位 (datamover_rst_n): 等待 c0_init_calib_complete + ~1s 延时后释放
+    TX 路径复位 (tx_loop_rst_n): datamover_rst_n & usr_mac_rst_n
+
+  【CDC 设计】
+    控制 (322→333): 脉冲→电平寄存器 → 2-FF ASYNC_REG → ext_rec_active/ext_play_active
+    ctrl_soft_reset: 单周期脉冲→toggle → 3-FF 同步器 → 边沿检测 → DDR4域脉冲
+    状态 (333→322):  多比特计数器 ×4 → xpm_cdc_gray (Gray码杜绝偏斜)
+                     单比特 err   ×2 → 2-FF ASYNC_REG
+    RX meta FIFO:   xpm_fifo_async (16 deep, usr_mac→c0_ddr4_ui)
+    TX meta FIFO:   xpm_fifo_async (64 deep, c0_ddr4_ui→usr_mac)
+
+  【CDC FIFO 数据面】
+    RX 方向: xpm_fifo_async (577bit × 4096, usr_mac→c0_ddr4_ui)
+    TX 方向: xpm_fifo_axis PACKET_FIFO="true" (512bit × 1024, c0_ddr4_ui→usr_mac)
+             → 深度 4096→2048→1024 以收敛 txoutclk_out[0] 域 BRAM 扇出时序
+             1024×64B=64KB 缓冲 (~192μs @333MHz), 对 DDR4 回放足够
+             整包缓冲: 收齐 tlast 后才吐出, 杜绝 TX Underflow
+
+  【DataMover 环回配对】
+    pending_fifo (64 deep): S2MM 命令暂存，等待 status 返回
+    lb_fifo (64 deep):     S2MM 完成 → 入队，等待 MM2S 调度
+    S2MM 冷却期: 10 周期 (跨时钟域防抖)
+    MM2S 冷却期: 1 周期
+
+  【AXI-Stream 字节序】
+    CMAC 约定: tdata[7:0] 最早上线。Ethernet/IP/UDP 大端序。
+    所有多字节字段需 {value[7:0], value[15:8]} 翻转后赋给 tdata，
+    单字节字段 (TTL/proto/ver) 无需翻转。
+
+
+════════════════════════════════════════════════════════════════════════════════
+六、LED 诊断面板
+════════════════════════════════════════════════════════════════════════════════
+
+  LED[0] (E16): 心跳 (50MHz/2^26 ≈ 0.75Hz)
+  LED[1] (E17): MAC Link Up (亮=100G 链路建立)
+  LED[2] (F15): DDR4未就绪→快闪(~40Hz) | 就绪后→S2MM活动(亮200ms) | 常亮=ERR
+  LED[3] (D15): DDR4未就绪→灭        | 就绪后→MM2S活动(亮200ms) | 常亮=ERR
+
+  正常启动时序: LED0闪 → 等待~1秒(LED2快闪) → LED2灭 → 系统就绪
+
+
+════════════════════════════════════════════════════════════════════════════════
+七、验证状态 (2026-05-12, full_test.ps1: 22/22 ALL PASS)
+════════════════════════════════════════════════════════════════════════════════
+
+  全链路验证通过:
+    [√] 100G CMAC 链路建立 (MAC Link Up, LED[1] 亮)
+    [√] ARP 应答 (PC ping 192.168.1.20 可达)
+    [√] ICMP Echo Reply (ping 通)
+    [√] GET_STATUS (初始 S2MM=0, MM2S=0)
+    [√] START_REC + 64B 小包 → S2MM 递增
+    [√] 追加大包 1024B → S2MM 继续递增
+    [√] STOP_REC → 计数稳定
+    [√] START_PLAY → MM2S 递增, Wireshark 可见回放包
+    [√] STOP_PLAY → MM2S 稳定
+    [√] SOFT_RESET (0x06) → S2MM=MM2S=0 清零
+    [√] 空录→空放 → S2MM=MM2S=0 (边界安全)
+    [√] 第二轮完整录放 → 无死锁, 计数正确
+    [√] 大载荷 1500B → 正常录放
+    [√] FIFO水位 RX_WATER/TX_WATER 检查 → 正常范围
+    [√] 非法命令 0xFF → 容错返回
+    [√] LED[0] 心跳闪烁
+    [√] LED[2] S2MM 活动指示 (发数据时闪烁)
+    [√] LED[3] MM2S 活动指示 (回放时闪烁)
+    [√] 命令响应源端口 8001 回传 (Windows 防火墙放行)
+    [√] 字节序正确 (big-endian 解码)
+    [√] PS 脚本全兼容 (fpga_test/test_rec_play/full_test)
+
+  已知限制:
+    - rx_demux 无反压通道, deframer.s_axis_tready 悬空 (4096深度FIFO兜底)
+    - DDR4 写入长度未记录, 回放复用上次写入量 (后续加写入字节计数)
+    - 端口 8000 可能与 WireGuard 冲突 (后续换端口)
+    - cmac_100g_wrapper 链路建立后需要 ~3.1μs (1000 cycle) 才释放 usr_mac_rst_n
+    - RS-FEC 丢对齐去抖: 连续 32 周期不对齐才触发复位
+
+  时序状态:
+    txoutclk_out[0] (322MHz): FIFO_DEPTH 降至 1024, BRAM ~11→~6, 预计收敛
+    原 2048 深度: 1 条 -0.020ns (xpm_fifo_axis BRAM REGCEB 扇出)
+
+
+════════════════════════════════════════════════════════════════════════════════
+八、已完成的关键修复
+════════════════════════════════════════════════════════════════════════════════
+
+  1. 【Deframer 尾拍垃圾数据】udp_100g_deframer_pro.sv
+     mask_lower_42() 函数根据 tkeep 逐字节掩码, 杜绝尾拍垃圾污染 payload。
+
+  2. 【CMAC TX Underflow】ddr4_subsystem_top.sv
+     TX CDC FIFO 替换为 xpm_fifo_axis PACKET_FIFO="true", 整包缓冲后连续吐出。
+
+  3. 【CMD/STS Pipeline 寄存器】ddr4_subsystem_top.sv
+     S2MM/MM2S CMD 和 STS 插入一级 pipeline, 解决 333MHz 时序违例。
+
+  4. 【致命: AXI-Stream 字节序】udp_cmd_parser.sv
+     所有多字节字段统一 {low_byte, high_byte} 翻转。修复前 EtherType/IP/Port
+     全部字节反序, PC 网卡硬件丢弃帧导致全部超时。
+
+  5. 【致命: 响应目标端口硬编码】udp_cmd_parser.sv
+     响应包 UDP dst_port 固定 8001, 当请求源端口非 8001 时 PC 拒绝接收。
+     改为从请求 UDP 头提取源端口并回传, 配合脚本 Bind 到任意端口均能收包。
+
+  6. 【IP 头校验和进位丢失】udp_cmd_parser.sv
+     9×16bit 累加改为 32bit 全进位 + 两级折叠回绕, 确保校验和正确。
+
+  7. 【PS 脚本字节序】所有 .ps1 脚本
+     修正 16-bit (高低字节变量名颠倒) 和 12-bit (错误右移4位) 解码公式。
+     统一为 (resp[N] << 8) | resp[N+1]。
+
+  8. 【PS 脚本网卡绑定】所有 .ps1 脚本
+     UDP socket 显式 Bind 到 100G 网卡 IP, 防止 WiFi 多接口抢路由。
+
+  9. 【LED 诊断改进】fpga_top_100g.sv
+     LED[2] 增加 DDR4 未就绪快闪指示 (~40Hz)。S2MM/MM2S 脉冲展宽 3ms→200ms。
+     新增 ddr4_hb_cnt 独立计数器避免跨时钟域问题。
+
+  10.【S2MM 冷却期】datamover_ctrl.sv
+      S2MM 命令间插入 10 周期冷却, 避免 CDC 亚稳态累积。
+
+  11.【CDC 多比特偏斜】fpga_top_100g.sv
+      16-bit/12-bit 计数器改用 xpm_cdc_gray (Gray码), 杜绝总线偏斜采样。
+
+  12.【ILA 清理】cmac.xdc + 全部源码
+      删除全部 ILA core + dbg_hub + mark_debug, 消除 Chipscope 16-213 错误。
+
+  13.【AXI-Stream 字节序: IP 校验和翻转】udp_cmd_parser.sv
+      IP checksum 16-bit 字段需置入 tdata 时翻转字节序: {csum[7:0], csum[15:8]}
+
+  14.【IP 校验和时序收敛】udp_cmd_parser.sv
+      9 项加法拆为两级流水线: wire → reg(csum_var_reg) → wire(csum_acc)
+      将 322MHz 组合逻辑从 9 级减为 4+5 级, WNS 提升 ~0.12ns
+
+  15.【PS 脚本 ReuseAddress】fpga_test.ps1
+      Socket 加 SetSocketOption(ReuseAddress,$true), 防止连续运行端口冲突
+
+  16.【cmd_parser 响应源端口固定 8001】udp_cmd_parser.sv
+      r_src_port 固定为 16'h1F41 (8001), 确保 Windows 防火墙状态跟踪放行
+
+  17.【TX CDC FIFO 深度 4096→2048】ddr4_subsystem_top.sv
+      降低 BRAM 数量 (~43→~22), 扇出减半, 时序从 WNS=-0.098 收敛至 -0.020ns
+
+  18.【RS-FEC 丢对齐去抖】cmac_100g_wrapper.sv
+      连续 32 周期 stat_rx_aligned=0 才触发复位, 避免 RS-FEC 瞬时重对齐误复位
+
+  19.【TX 路径复位统一】ddr4_subsystem_top.sv
+      tx_path_rst_n 改用本地 3-FF 同步的 usr_mac_rst_n_sync, 与 RX CDC FIFO 一致
+
+  20.【req_src_port 字节序修正】udp_cmd_parser.sv
+      请求源端口提取: {byte34(MSB), byte35(LSB)} → 正确的网络字节序解析
+
+
+════════════════════════════════════════════════════════════════════════════════
+九、引脚与资源
+════════════════════════════════════════════════════════════════════════════════
+
+  FPGA:        XCKU5P-FFVB676
+  GT Quad:     GTYE4_CHANNEL_X0Y4..X0Y7
+  CMAC:        CMACE4_X0Y0
+  时钟:        50MHz (E18), 156.25MHz GT REF (T7), DDR4 REF (T24/T25)
+  复位:        sys_rst_pad_in (P19, LVCMOS12, 高有效)
+  LED:         led_out[3:0] (E16/E17/F15/D15, LVCMOS18)
+  DDR4:        32-bit 数据总线, 1 rank
+
+
+════════════════════════════════════════════════════════════════════════════════
+十、Phase 2 — 数据采集卡规格 (规划中)
+════════════════════════════════════════════════════════════════════════════════
+
+  与 Phase 1 的本质区别:
+    Phase 1 = 包级录放:  PC 发包 → DDR4 → 原路返回, 有 tlast 边界
+    Phase 2 = 连续流采集: ADC 不间断采样 → DDR4 环形缓冲 → PCIe 异步上传,
+             无包边界, 靠触发/水位管理控制捕获窗口
+
+  ─── 硬件规格 ───
+  FPGA:       XCVU5P (或同系列更大规模)
+  ADC:        双通道, 1.5GSPS, 8bit, LVDS 接口
+              → 带宽: 2 × 1.5G × 8bit = 24Gbps ≈ 3GB/s
+  PCIe:       x4 Gen3 (8.0GT/s), 有效带宽 ~3.2GB/s
+  SFP+:       4 × 10Gbps, FPGA 多板互联 (触发分发 + 数据汇聚)
+  DDR4:       32-bit @ 333MHz, 作为环形缓冲
+  100G CMAC:  仅控制面 (UDP 命令 + 状态回读)
+
+  ─── 数据路径 ───
+  ADC (LVDS, 750MHz DDR)
+    → ISERDESE3 / BITSLICE (1:4 或 1:8 解串)
+    → Packer (拼成 512-bit AXI-Stream beat)
+    → CDC FIFO (375MHz → 333MHz)
+    → DDR4 Ring Buffer (连续写入, 写指针循环)
+    → CDC FIFO (333MHz → 250MHz)
+    → PCIe XDMA C2H (Scatter-Gather DMA)
+    → PC 端驱动 → 用户态文件写入 (.bin)
+
+  ─── 环形缓冲 (替代包级录放) ───
+    ┌──────────────────────────┐
+    │      DDR4 (1GB)           │
+    │  0x0000_0000              │ ← wr_ptr (ADC 连续写入)
+    │  ┌──────────────────┐    │
+    │  │  已写入/未读出     │    │ ← 水位 = wr_ptr - rd_ptr
+    │  │  (有效数据区域)    │    │
+    │  ├──────────────────┤    │
+    │  │  空闲区域          │    │
+    │  └──────────────────┘    │
+    │  0x3FFF_FFFF              │ ← rd_ptr (PCIe 异步读出)
+    └──────────────────────────┘
+
+    wr_ptr: 从 0 开始, 每次写入 64B beat 后 +1, 到末尾回绕到 0
+    rd_ptr: PCIe DMA 完成一帧后更新, 追赶 wr_ptr
+    水位 = (wr_ptr - rd_ptr) mod buffer_size
+
+    水位 > 75% → 加速 PCIe 读出 (增大 descriptor 链长度)
+    水位 = 100% → Overflow 中断, 丢弃标志置位, 停止采集
+
+  ─── 触发系统 ───
+    模式1: 软件触发   — PC 发 UDP 命令 0x10 (SW_TRIG)
+    模式2: 外部触发   — SMA 输入, 上升沿/下降沿可配置
+    模式3: 电平触发   — 持续高电平期间采集
+    模式4: 自动触发   — 自由运行, 连续采集 (默认模式)
+
+    预触发深度: 触发前保留 N 个采样点 (环形缓冲天然支持, 只需记录触发时刻的 wr_ptr)
+    捕获深度:   触发后采集 M 个采样点 → 自动停止
+    触发时间戳:  64-bit, 基于 ADC 采样时钟计数
+
+  ─── PCIe DMA ───
+    XDMA IP:
+      C2H (Card-to-Host) channel × 1
+      Scatter-Gather descriptor chain (环形, PC 端驱动维护)
+      最大单次传输: 可配置 (建议 1MB/descriptor)
+    PC 驱动:   Windows/Linux, 用户态 mmap 或 read
+    文件格式:  .bin 原始 ADC 数据 + 可选 TIFF/HDF5 header
+
+    数据包格式 (每个 DMA 帧):
+      [Timestamp 64b] [Flags 16b] [Channel 16b] [Reserved 32b] [ADC Data ...]
+
+  ─── 信号处理流水线 ───
+    ADC 原始数据 → DDC (数字下变频) → FIR/IIR 滤波 → 抽取 → DDR4
+    所有 DSP 参数通过 UDP 命令实时配置
+    流水线可 bypass (原始数据直通, 调试用)
+
+  ─── SFP+ 多板同步 ───
+    板0 (Master):
+      驱动参考时钟到 SFP+ TX
+      输出触发信号到 SFP+ TX
+      接收板1-3 的采集数据 (SFP+ RX) → 汇聚 → PCIe
+    板1-3 (Slave):
+      从 SFP+ RX 恢复参考时钟
+      从 SFP+ RX 接收触发
+      采集数据通过 SFP+ TX 发回 Master
+    同步精度: < 1ns (同源时钟 + 确定性延迟补偿)
+
+  ════════════════════════════════════════════════════════════════════
+  Phase 2 — 扩展命令协议
+  ════════════════════════════════════════════════════════════════════
+
+  0x01~0x06: 保留 Phase 1 命令 (调试用, DDR4 路径改为环形缓冲模式)
+
+  ┌────────┬──────────────┬──────────────────────────────────────────────┐
+  │ 命令码 │ 名称         │ 功能                                        │
+  ├────────┼──────────────┼──────────────────────────────────────────────┤
+  │ 0x10   │ ADC_CONFIG   │ 配置采样率/增益/通道使能/耦合方式            │
+  │ 0x11   │ TRIG_CONFIG  │ 触发源/边沿/预触发深度/捕获窗口长度          │
+  │ 0x12   │ CAP_START    │ 开始采集 (使能 ADC→Ring Buffer 写入)         │
+  │ 0x13   │ CAP_STOP     │ 停止采集                                    │
+  │ 0x14   │ DSP_CONFIG   │ DDC参数/滤波器系数/Taps                     │
+  │ 0x15   │ DMA_CONFIG   │ PCIe descriptor基址/帧大小/中断使能          │
+  │ 0x16   │ GET_CAP_STATUS│ 查询: wr_ptr/rd_ptr/水位/overflow/时间戳    │
+  │ 0x17   │ SFP_CONFIG   │ 多板同步: Master/Slave/触发分发/延迟补偿     │
+  └────────┴──────────────┴──────────────────────────────────────────────┘
+
+  ════════════════════════════════════════════════════════════════════
+  典型采集流程
+  ════════════════════════════════════════════════════════════════════
+
+  ┌─────────────────────────────────────────────────────────────────┐
+  │ [10] ADC_CONFIG   → 配置 2ch/1.5GSPS/8bit/DC耦合                │
+  │ [11] TRIG_CONFIG  → 触发源=软件, 预触发=1ms, 捕获窗口=100ms     │
+  │ [14] DSP_CONFIG   → Bypass (原始数据直通)                       │
+  │ [15] DMA_CONFIG   → 设置 descriptor chain 基址                  │
+  │ [12] CAP_START    → ADC 开始采样, 数据持续写入 Ring Buffer       │
+  │                      (LED[2] 闪烁 = 采集中)                      │
+  │ [16] GET_CAP_STATUS → 水位 45%, overflow=0, wr_ptr=0x0A3F_0000   │
+  │ (PC 端 DMA 异步接收 → 写硬盘)                                   │
+  │ [16] GET_CAP_STATUS → 水位 12%, 数据已追上                       │
+  │ [13] CAP_STOP     → 停止采集                                    │
+  │ (PC 端 wait DMA completion → 关闭文件)                          │
+  └─────────────────────────────────────────────────────────────────┘
+
+  ─── 可行性分析 ───
+  带宽:     ADC 3GB/s vs PCIe 3.2GB/s → 单通道充足, 双通道需降采样或丢帧
+   DDR4:   32-bit @ 333MHz = 21.3GB/s, ADC写3GB/s + PCIe读3GB/s = 6GB/s, 占 28%
+   资源:    VU5P LUT/FF/BRAM/DSP 利用率预计 < 20%
+   代码复用: Phase 1 约 60% 可直接复用:
+            cmac_wrapper / cmd_parser / demux / arbiter / CDC 基础设施
+            需要重写: datamover_ctrl (改为环形缓冲控制)
+            需要新增: ADC deserializer / DSP Pipeline / XDMA wrapper / SFP+ 模块
+   最大风险: ADC LVDS 750MHz DDR 物理接口 (BITSLICE calibration)
+   时序挑战: 375MHz ADC域 vs 333MHz DDR4域 vs 250MHz PCIe域
+
+  ─── 开发路线 ───
+  Phase 2a (2周): ADC 最小系统
+    LVDS → ISERDESE3 → 简单计数器 → LED/100G 回读验证采样正确
+  Phase 2b (2周): DDR4 环形缓冲
+    ADC data → async FIFO → DDR4 Ring Buffer (wr_ptr 管理)
+    → 独立 MM2S 读回 → 100G TX 回传验证
+  Phase 2c (3周): PCIe DMA
+    XDMA IP + Windows/Linux driver
+    DDR4 Ring Buffer → PCIe C2H → PC 文件落盘
+  Phase 2d (2周): 触发系统 + 水位管理
+    外部触发输入 + 预触发深度 + 捕获窗口 + overflow 检测
+  Phase 2e (2周): DSP Pipeline + SFP+ 同步
+    DDC / Filter / 抽取 + 多板触发分发与时钟同步
+  Phase 2f (1周): 集成联调
+    全链路压力测试, 长时间采集验证, 扩展命令协议
+
+
+════════════════════════════════════════════════════════════════════════════════
+十一、常用操作
+════════════════════════════════════════════════════════════════════════════════
+
+  综合前确保 XPM 库已启用:
+    set_property XPM_LIBRARIES {XPM_FIFO XPM_CDC XPM_MEMORY} [current_project]
+
+  关闭 GT 环回 (连接真实网络):
+    cmac_100g_wrapper.sv: .gt_loopback_in 12'h249 → 12'h000
+
+  默认网络参数 (udp_100g_config_slave.sv / JTAG AXI 可改写):
+    FPGA MAC: 00:0A:35:01:02:03   FPGA IP: 192.168.1.20
+    目标 MAC: E4:54:E8:11:22:33   目标 IP: 192.168.1.10
+    数据端口: 8000   命令端口: 8001
+
+  录制+回放一次完整流程:
+    powershell -ExecutionPolicy Bypass -File scripts\test_rec_play.ps1
+
+  基础命令测试:
+    powershell -ExecutionPolicy Bypass -File scripts\fpga_test.ps1
+
+================================================================================
