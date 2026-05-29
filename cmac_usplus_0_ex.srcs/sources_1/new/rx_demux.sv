@@ -57,6 +57,12 @@ module rx_demux (
     output reg          m3_axis_tvalid,
     output reg          m3_axis_tlast,
 
+    // Output Channel 4: UDP port 8002 -> search engine data plane
+    output reg  [511:0] m4_axis_tdata,
+    output reg  [63:0]  m4_axis_tkeep,
+    output reg          m4_axis_tvalid,
+    output reg          m4_axis_tlast,
+
     // 统计脉冲输出
     output reg          o_stat_rx_arp,
     output reg          o_stat_rx_icmp,
@@ -101,7 +107,8 @@ module rx_demux (
     wire [15:0] udp_dst_port = has_vlan
         ? {s_axis_tdata[327:320], s_axis_tdata[335:328]}   // byte40=MSB, byte41=LSB
         : {s_axis_tdata[295:288], s_axis_tdata[303:296]};  // byte36=MSB, byte37=LSB
-    wire        is_udp_cmd = (udp_dst_port == 16'h1F41); // 8001 = 0x1F41
+    wire        is_udp_cmd   = (udp_dst_port == 16'h1F41); // 8001 = 0x1F41
+    wire        is_udp_data2 = (udp_dst_port == 16'h1F42); // 8002 = 0x1F42
 
     // =========================================================================
     // 状态机与错误处理定义
@@ -112,6 +119,7 @@ module rx_demux (
         PASS_M1 = 3'd2,   // ICMP
         PASS_M2 = 3'd3,   // UDP 数据 (port 8000)
         PASS_M3 = 3'd5,   // UDP 命令 (port 8001), 新增
+        PASS_M4 = 3'd6,   // UDP 数据面 (port 8002), 新增
         DRAIN   = 3'd4    // 错误或不支持的包
     } state_t;
     
@@ -143,8 +151,9 @@ module rx_demux (
                 else if (eth_type_class == 16'h0800 && ip_proto == 8'h01 && ipv4_to_local)
                     route_target = PASS_M1;
                 else if (eth_type_class == 16'h0800 && ip_proto == 8'h11 && ipv4_to_local) begin
-                    if (is_udp_cmd)       route_target = PASS_M3;
-                    else                  route_target = PASS_M2;
+                    if (is_udp_cmd)          route_target = PASS_M3;
+                    else if (is_udp_data2)   route_target = PASS_M4;
+                    else                     route_target = PASS_M2;
                 end
                 else
                     route_target = IDLE;
@@ -175,8 +184,9 @@ module rx_demux (
                 else if (eth_type_class == 16'h0800 && ip_proto == 8'h01 && ipv4_to_local)
                     state <= PASS_M1;
                 else if (eth_type_class == 16'h0800 && ip_proto == 8'h11 && ipv4_to_local) begin
-                    if (is_udp_cmd)       state <= PASS_M3;
-                    else                  state <= PASS_M2;
+                    if (is_udp_cmd)          state <= PASS_M3;
+                    else if (is_udp_data2)   state <= PASS_M4;
+                    else                     state <= PASS_M2;
                 end
                 else
                     state <= DRAIN;
@@ -194,11 +204,13 @@ module rx_demux (
             m1_axis_tvalid <= 1'b0;
             m2_axis_tvalid <= 1'b0;
             m3_axis_tvalid <= 1'b0;
+            m4_axis_tvalid <= 1'b0;
         end else begin
             m0_axis_tvalid <= 1'b0;
             m1_axis_tvalid <= 1'b0;
             m2_axis_tvalid <= 1'b0;
             m3_axis_tvalid <= 1'b0;
+            m4_axis_tvalid <= 1'b0;
 
             m0_axis_tdata  <= s_axis_tdata;
             m0_axis_tlast  <= s_axis_tlast;
@@ -215,12 +227,17 @@ module rx_demux (
             m3_axis_tkeep  <= s_axis_tkeep;
             m3_axis_tlast  <= s_axis_tlast;
 
+            m4_axis_tdata  <= s_axis_tdata;
+            m4_axis_tkeep  <= s_axis_tkeep;
+            m4_axis_tlast  <= s_axis_tlast;
+
             if (s_axis_tvalid && !block_out) begin
                 case (route_target)
                     PASS_M0: m0_axis_tvalid <= 1'b1;
                     PASS_M1: m1_axis_tvalid <= 1'b1;
                     PASS_M2: m2_axis_tvalid <= 1'b1;
                     PASS_M3: m3_axis_tvalid <= 1'b1;
+                    PASS_M4: m4_axis_tvalid <= 1'b1;
                     default: ;
                 endcase
             end
