@@ -1,9 +1,9 @@
 // ddr4_scanner.sv — Fine search: DDR4 sequential scan → DCU → TopK heap
 module ddr4_scanner #(
-    parameter MAX_PROBES = 8,
-    parameter MAX_TOPK   = 256,
-    parameter MAX_DIM    = 1536,
-    parameter VEC_BYTES  = 1024    // 256-dim × 4B = 1024B default
+    parameter int MAX_PROBES = 8,
+    parameter int MAX_TOPK   = 256,
+    parameter int MAX_DIM    = 1536,
+    parameter int VEC_BYTES  = 1024    // 256-dim × 4B = 1024B default
 ) (
     input  wire         clk,
     input  wire         rst,
@@ -15,12 +15,12 @@ module ddr4_scanner #(
     input  wire [7:0]   i_topk,
 
     // Cluster list from coarse_search
-    input  wire [9:0]   i_cluster_id   [0:MAX_PROBES-1],
-    input  wire [15:0]  i_cluster_size [0:MAX_PROBES-1],
+    input  wire [9:0]   i_cluster_id   [MAX_PROBES],
+    input  wire [15:0]  i_cluster_size [MAX_PROBES],
     input  wire [3:0]   i_cluster_count,
 
     // Cluster base addresses from index_manager
-    input  wire [31:0]  i_cluster_base [0:MAX_PROBES-1],
+    input  wire [31:0]  i_cluster_base [MAX_PROBES],
 
     // AXI read (→ ddr4_arbiter)
     output wire [31:0]  m_axi_araddr,
@@ -54,11 +54,11 @@ module ddr4_scanner #(
     output wire         o_done,
     output wire [31:0]  o_vectors_scanned     // diagnostic
 );
-    localparam S_IDLE      = 3'd0;
-    localparam S_NEXT_CLUSTER = 3'd1;
-    localparam S_SCAN_VEC  = 3'd2;
-    localparam S_DRAIN     = 3'd3;
-    localparam S_DONE      = 3'd4;
+    localparam logic [2:0] SIDLE      = 3'd0;
+    localparam logic [2:0] SNEXTCLUSTER = 3'd1;
+    localparam logic [2:0] SSCANVEC  = 3'd2;
+    localparam logic [2:0] SDRAIN     = 3'd3;
+    localparam logic [2:0] SDONE      = 3'd4;
 
     reg [2:0]  state;
     reg [3:0]  clu_idx;          // which cluster we're processing
@@ -74,7 +74,7 @@ module ddr4_scanner #(
 
     always @(posedge clk) begin
         if (rst) begin
-            state <= S_IDLE;
+            state <= SIDLE;
             clu_idx <= 0;
             vec_in_cluster <= 0;
             global_vec_id <= 0;
@@ -83,9 +83,9 @@ module ddr4_scanner #(
             vecs_scanned <= 0;
         end else begin
             case (state)
-                S_IDLE: begin
+                SIDLE: begin
                     if (i_start) begin
-                        state <= S_NEXT_CLUSTER;
+                        state <= SNEXTCLUSTER;
                         clu_idx <= 0;
                         vec_in_cluster <= 0;
                         global_vec_id <= 0;
@@ -94,19 +94,19 @@ module ddr4_scanner #(
                     end
                 end
 
-                S_NEXT_CLUSTER: begin
+                SNEXTCLUSTER: begin
                     if (clu_idx < i_cluster_count && clu_size > 0) begin
                         current_addr <= clu_base;
                         vec_in_cluster <= 0;
-                        state <= S_SCAN_VEC;
+                        state <= SSCANVEC;
                     end else if (clu_idx >= i_cluster_count) begin
-                        state <= S_DRAIN;
+                        state <= SDRAIN;
                     end else begin
                         clu_idx <= clu_idx + 1;
                     end
                 end
 
-                S_SCAN_VEC: begin
+                SSCANVEC: begin
                     // Stream vector data from DDR4 to DCU
                     // 1 vector = beats_per_vec beats of 512b (64B) each
                     if (m_axi_rvalid && m_axi_rready) begin
@@ -118,39 +118,40 @@ module ddr4_scanner #(
                             global_vec_id <= global_vec_id + 1;
                             vecs_scanned <= vecs_scanned + 1;
                             beat_count <= 0;
-                            current_addr <= current_addr + (beats_per_vec << 6);  // +beats_per_vec*64
+                            current_addr <= current_addr + (beats_per_vec << 6);
 
                             if (vec_in_cluster + 1 >= clu_size) begin
                                 clu_idx <= clu_idx + 1;
-                                state <= S_NEXT_CLUSTER;
+                                state <= SNEXTCLUSTER;
                             end
                         end
                     end
                 end
 
-                S_DRAIN: begin
+                SDRAIN: begin
                     // Wait for DCU pipeline + heap sift-downs
-                    state <= S_DONE;
+                    state <= SDONE;
                 end
 
-                S_DONE: state <= S_IDLE;
+                SDONE: state <= SIDLE;
+                default: ;
             endcase
         end
     end
 
     // AXI read: sequential burst from current DDR4 address
     assign m_axi_araddr  = current_addr;
-    assign m_axi_arvalid = (state == S_SCAN_VEC);
-    assign m_axi_rready  = (state == S_SCAN_VEC);
+    assign m_axi_arvalid = (state == SSCANVEC);
+    assign m_axi_rready  = (state == SSCANVEC);
 
     // DCU: query vector side (preloaded by cmd_dispatcher into DCU buffer)
     // For now: query vector is loaded externally via o_dcu_start pulsed once
-    assign o_dcu_start  = (state == S_NEXT_CLUSTER) && (clu_idx == 0);
+    assign o_dcu_start  = (state == SNEXTCLUSTER) && (clu_idx == 0);
     assign o_dcu_dim    = i_dim;
     assign o_dcu_metric = i_metric;
 
     // DCU vec_b: DDR4 data goes straight to DCU
-    assign o_dcu_vec_b_valid = m_axi_rvalid && (state == S_SCAN_VEC);
+    assign o_dcu_vec_b_valid = m_axi_rvalid && (state == SSCANVEC);
     assign o_dcu_vec_b_ready = 1'b1;
     assign o_dcu_vec_a_valid = 1'b0;  // query preloaded externally
     assign o_dcu_vec_a       = 512'd0;
@@ -160,6 +161,6 @@ module ddr4_scanner #(
     assign o_heap_distance = i_dcu_distance;
     assign o_heap_vector_id = global_vec_id;
 
-    assign o_done = (state == S_DONE);
+    assign o_done = (state == SDONE);
     assign o_vectors_scanned = vecs_scanned;
 endmodule

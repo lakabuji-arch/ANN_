@@ -1,6 +1,6 @@
 module index_manager #(
-    parameter NCLUSTERS  = 1024,
-    parameter ZONE_SIZE  = 32'h4000_0000   // 1GB per zone
+    parameter int NCLUSTERS  = 1024,
+    parameter logic [31:0] ZONE_SIZE  = 32'h4000_0000   // 1GB per zone
 ) (
     input  wire         clk,
     input  wire         rst,
@@ -41,18 +41,18 @@ module index_manager #(
     reg active_zone;                          // 0=A, 1=B
     reg [31:0] standby_tail;                  // write pointer in standby zone
 
-    localparam ZONE_A_BASE = 32'h0000_0000;
-    localparam ZONE_B_BASE = 32'h4000_0000;
+    localparam logic [31:0] ZONE_A_BASE = 32'h0000_0000;
+    localparam logic [31:0] ZONE_B_BASE = 32'h4000_0000;
 
     wire [31:0] active_base  = active_zone ? ZONE_B_BASE : ZONE_A_BASE;
     wire [31:0] standby_base = active_zone ? ZONE_A_BASE : ZONE_B_BASE;
 
     // URAM cluster table: dual-zone, 1024 entries each
     // Simple register-based for now (URAM inference needs explicit attributes)
-    reg [31:0] cluster_base_a [0:NCLUSTERS-1];
-    reg [15:0] cluster_size_a [0:NCLUSTERS-1];
-    reg [31:0] cluster_base_b [0:NCLUSTERS-1];
-    reg [15:0] cluster_size_b [0:NCLUSTERS-1];
+    reg [31:0] cluster_base_a [NCLUSTERS];
+    reg [15:0] cluster_size_a [NCLUSTERS];
+    reg [31:0] cluster_base_b [NCLUSTERS];
+    reg [15:0] cluster_size_b [NCLUSTERS];
 
     wire [31:0] wr_base_ptr    = active_zone ? cluster_base_a[i_cluster_wr_idx] : cluster_base_b[i_cluster_wr_idx];
     wire [15:0] wr_size_ptr    = active_zone ? cluster_size_a[i_cluster_wr_idx] : cluster_size_b[i_cluster_wr_idx];

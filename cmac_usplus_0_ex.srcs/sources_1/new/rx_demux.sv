@@ -19,31 +19,31 @@
 
 module rx_demux (
     // 时钟和复位
-    input  wire         clk,        
-    input  wire         rst_n,           
+    input  wire         clk,
+    input  wire         rst_n,
 
     // 配置信号
-    input  wire         cfg_vlan_enable, 
+    input  wire         cfg_vlan_enable,
     input  wire [47:0]  cfg_local_mac,
     input  wire [31:0]  cfg_local_ip,
 
     // 输入 AXI-Stream 接口（来自 CMAC，无 tready）
-    input  wire [511:0] s_axis_tdata,     
-    input  wire [63:0]  s_axis_tkeep,    
-    input  wire         s_axis_tvalid,    
-    input  wire         s_axis_tlast,     
-    input  wire         s_axis_rx_err,    
+    input  wire [511:0] s_axis_tdata,
+    input  wire [63:0]  s_axis_tkeep,
+    input  wire         s_axis_tvalid,
+    input  wire         s_axis_tlast,
+    input  wire         s_axis_rx_err,
 
     // 输出通道 0: ARP（只传输数据，不需要 tkeep）
-    output reg  [511:0] m0_axis_tdata,    
-    output reg          m0_axis_tvalid,   
-    output reg          m0_axis_tlast,    
+    output reg  [511:0] m0_axis_tdata,
+    output reg          m0_axis_tvalid,
+    output reg          m0_axis_tlast,
 
     // 输出通道 1: ICMP（需要 tkeep）
-    output reg  [511:0] m1_axis_tdata,    
-    output reg  [63:0]  m1_axis_tkeep,    
-    output reg          m1_axis_tvalid,   
-    output reg          m1_axis_tlast,    
+    output reg  [511:0] m1_axis_tdata,
+    output reg  [63:0]  m1_axis_tkeep,
+    output reg          m1_axis_tvalid,
+    output reg          m1_axis_tlast,
 
     // 输出通道 2: UDP 端口 8000 → Deframer / 数据面
     output reg  [511:0] m2_axis_tdata,
@@ -122,7 +122,7 @@ module rx_demux (
         PASS_M4 = 3'd6,   // UDP 数据面 (port 8002), 新增
         DRAIN   = 3'd4    // 错误或不支持的包
     } state_t;
-    
+
     state_t state, route_target;
 
     reg rx_err_hold;

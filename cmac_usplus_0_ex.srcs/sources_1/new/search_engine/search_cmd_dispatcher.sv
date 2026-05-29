@@ -1,6 +1,6 @@
 module search_cmd_dispatcher #(
-    parameter MAX_DIM = 1536,
-    parameter MAX_TOPK = 256
+    parameter int MAX_DIM = 1536,
+    parameter int MAX_TOPK = 256
 ) (
     input  wire         clk,
     input  wire         rst,
@@ -27,21 +27,21 @@ module search_cmd_dispatcher #(
 
     // ← coarse_search results (cluster IDs)
     input  wire         i_coarse_done,
-    input  wire [9:0]   i_coarse_cluster_id [0:7],
-    input  wire [15:0]  i_coarse_cluster_size [0:7],
+    input  wire [9:0]   i_coarse_cluster_id [8],
+    input  wire [15:0]  i_coarse_cluster_size [8],
     input  wire [3:0]   i_coarse_cluster_count,
 
     // → ddr4_scanner
     output wire         o_scanner_start,
-    output wire [9:0]   o_scanner_cluster_id [0:7],
-    output wire [15:0]  o_scanner_cluster_size [0:7],
-    output wire [31:0]  o_scanner_cluster_base [0:7],
+    output wire [9:0]   o_scanner_cluster_id [8],
+    output wire [15:0]  o_scanner_cluster_size [8],
+    output wire [31:0]  o_scanner_cluster_base [8],
     output wire [3:0]   o_scanner_cluster_count,
 
     // ← scanner results
     input  wire         i_scanner_done,
-    input  wire [31:0]  i_result_dist [0:9],
-    input  wire [31:0]  i_result_id   [0:9],
+    input  wire [31:0]  i_result_dist [10],
+    input  wire [31:0]  i_result_id   [10],
 
     // → index_manager
     output wire         o_insert_req,
@@ -53,15 +53,15 @@ module search_cmd_dispatcher #(
     output wire [31:0]  o_latency_cycles,
     output wire [31:0]  o_qps_counter
 );
-    localparam S_IDLE    = 4'd0;
-    localparam S_PARSE   = 4'd1;
-    localparam S_SEARCH  = 4'd2;   // orchestrating SEARCH
-    localparam S_INSERT  = 4'd3;
-    localparam S_REINDEX = 4'd4;
-    localparam S_STATUS  = 4'd5;
-    localparam S_RESP    = 4'd6;   // sending response
-    localparam S_WAIT_COARSE  = 4'd7;
-    localparam S_WAIT_SCANNER = 4'd8;
+    localparam logic [3:0] SIDLE    = 4'd0;
+    localparam logic [3:0] SPARSE   = 4'd1;
+    localparam logic [3:0] SSEARCH  = 4'd2;   // orchestrating SEARCH
+    localparam logic [3:0] SINSERT  = 4'd3;
+    localparam logic [3:0] SREINDEX = 4'd4;
+    localparam logic [3:0] SSTATUS  = 4'd5;
+    localparam logic [3:0] SRESP    = 4'd6;   // sending response
+    localparam logic [3:0] SWAITCOARSE  = 4'd7;
+    localparam logic [3:0] SWAITSCANNER = 4'd8;
 
     reg [3:0]  state;
     reg [7:0]  cmd_code;
@@ -72,7 +72,7 @@ module search_cmd_dispatcher #(
     reg [7:0]  search_topk;
 
     // Query buffer: store up to 1536-dim = 96 beats of 16 floats
-    reg [511:0] query_buffer [0:95];
+    reg [511:0] query_buffer [96];
     reg [6:0]   query_chunks;
     reg [6:0]   query_idx;
 
@@ -98,7 +98,7 @@ module search_cmd_dispatcher #(
 
     always @(posedge clk) begin
         if (rst) begin
-            state <= S_IDLE;
+            state <= SIDLE;
             cycle_ctr <= 0;
             qps_ctr <= 0;
             search_start_cycle <= 0;
@@ -107,15 +107,15 @@ module search_cmd_dispatcher #(
             cycle_ctr <= cycle_ctr + 1;
 
             case (state)
-                S_IDLE: begin
+                SIDLE: begin
                     if (s_axis_cmd_tvalid) begin
                         cmd_code <= pkt_cmd;
                         seq_num  <= pkt_seq;
-                        state <= S_PARSE;
+                        state <= SPARSE;
                     end
                 end
 
-                S_PARSE: begin
+                SPARSE: begin
                     case (pkt_cmd)
                         8'h01: begin  // SEARCH
                             search_dim    <= payload_dim[10:0];
@@ -123,69 +123,69 @@ module search_cmd_dispatcher #(
                             search_topk   <= payload_topk;
                             search_probes <= 2;  // default nprobe=2
                             search_start_cycle <= cycle_ctr;
-                            state <= S_SEARCH;
+                            state <= SSEARCH;
                         end
                         8'h02: begin  // INSERT
-                            state <= S_INSERT;
+                            state <= SINSERT;
                         end
                         8'h04: begin  // REINDEX
-                            state <= S_REINDEX;
+                            state <= SREINDEX;
                         end
                         8'h06: begin  // GET_STATUS
-                            state <= S_STATUS;
+                            state <= SSTATUS;
                         end
-                        default: state <= S_RESP;
+                        default: state <= SRESP;
                     endcase
                 end
 
-                S_SEARCH: begin
+                SSEARCH: begin
                     if (i_coarse_done) begin
                         // Route coarse results to scanner
-                        state <= S_WAIT_SCANNER;
+                        state <= SWAITSCANNER;
                     end
                 end
 
-                S_WAIT_SCANNER: begin
+                SWAITSCANNER: begin
                     if (i_scanner_done) begin
                         search_latency <= cycle_ctr - search_start_cycle;
                         qps_ctr <= qps_ctr + 1;
-                        state <= S_RESP;
+                        state <= SRESP;
                     end
                 end
 
-                S_RESP: begin
+                SRESP: begin
                     if (m_axis_resp_tready) begin
                         resp_valid <= 0;
-                        state <= S_IDLE;
+                        state <= SIDLE;
                     end
                 end
 
-                default: state <= S_IDLE;
+                default: state <= SIDLE;
             endcase
         end
     end
 
     // Output assignments
-    assign s_axis_cmd_tready = (state == S_IDLE);
+    assign s_axis_cmd_tready = (state == SIDLE);
 
-    assign o_search_start  = (state == S_SEARCH);
+    assign o_search_start  = (state == SSEARCH);
     assign o_search_dim    = search_dim;
     assign o_search_metric = search_metric;
     assign o_search_probes = search_probes;
     assign o_search_topk   = search_topk;
 
-    assign o_scanner_start = (state == S_WAIT_COARSE) && i_coarse_done;
+    assign o_scanner_start = (state == SWAITCOARSE) && i_coarse_done;
     assign o_scanner_cluster_id   = i_coarse_cluster_id;   // pass through
     assign o_scanner_cluster_size = i_coarse_cluster_size;
     assign o_scanner_cluster_count = i_coarse_cluster_count;
 
-    assign o_reindex_switch = (state == S_REINDEX);
-    assign o_insert_req     = (state == S_INSERT) && s_axis_cmd_tvalid;
+    assign o_reindex_switch = (state == SREINDEX);
+    assign o_insert_req     = (state == SINSERT) && s_axis_cmd_tvalid;
 
     assign o_latency_cycles = search_latency;
     assign o_qps_counter    = qps_ctr;
 
     // Response packing (simplified)
     assign m_axis_resp_tdata  = {504'd0, seq_num, cmd_code | 8'h80};  // ACK
-    assign m_axis_resp_tvalid = (state == S_RESP);
+    assign m_axis_resp_tvalid = (state == SRESP);
 endmodule

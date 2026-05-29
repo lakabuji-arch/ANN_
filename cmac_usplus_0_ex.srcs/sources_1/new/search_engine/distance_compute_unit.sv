@@ -1,7 +1,7 @@
 // distance_compute_unit.sv — Pipelined vector distance calculator
 // Q16.16 fixed-point, DSP-inferred, 4-stage pipeline
 module distance_compute_unit #(
-    parameter MAX_DIM = 1536
+    parameter int MAX_DIM = 1536
 ) (
     input  wire         clk,
     input  wire         rst,
@@ -17,19 +17,19 @@ module distance_compute_unit #(
     output wire         o_valid,
     output wire [31:0]  o_distance
 );
-    localparam ST_IDLE    = 3'd0;
-    localparam ST_COMPUTE = 3'd1;
-    localparam ST_FLUSH   = 3'd2;
-    localparam ST_DONE    = 3'd3;
+    localparam logic [2:0] STIDLE    = 3'd0;
+    localparam logic [2:0] STCOMPUTE = 3'd1;
+    localparam logic [2:0] STFLUSH   = 3'd2;
+    localparam logic [2:0] STDONE    = 3'd3;
 
-    reg [2:0]  state = ST_IDLE;
+    reg [2:0]  state = STIDLE;
     reg [10:0] dim_cnt;
     reg [63:0] accum;          // 64-bit internal accumulator
     reg [31:0] result_reg;
 
     // Unpack 512b into 16 x 32b
-    wire signed [31:0] a_val [0:15];
-    wire signed [31:0] b_val [0:15];
+    wire signed [31:0] a_val [16];
+    wire signed [31:0] b_val [16];
     genvar g;
     generate
         for (g = 0; g < 16; g = g + 1) begin : gen_unpack
@@ -39,25 +39,25 @@ module distance_compute_unit #(
     endgenerate
 
     // Pipeline registers: stage1 = subtraction, stage2 = multiply, stage3 = pairwise add
-    reg signed [31:0] s1_diff [0:15];
-    reg signed [31:0] s2_prod [0:15];
-    reg signed [31:0] s3_sum  [0:7];
-    reg signed [31:0] s4_sum  [0:3];
-    reg signed [31:0] s5_sum  [0:1];
+    reg signed [31:0] s1_diff [16];
+    reg signed [31:0] s2_prod [16];
+    reg signed [31:0] s3_sum  [8];
+    reg signed [31:0] s4_sum  [4];
+    reg signed [31:0] s5_sum  [2];
     reg signed [31:0] s6_total;
-    reg         pipe_valid [0:6];  // valid bit per pipeline stage
+    reg         pipe_valid [7];  // valid bit per pipeline stage
 
     integer i;
     always @(posedge clk) begin
         if (rst) begin
-            state <= ST_IDLE;
+            state <= STIDLE;
             dim_cnt <= 0;
             accum <= 0;
             result_reg <= 0;
             for (i = 0; i < 7; i = i + 1) pipe_valid[i] <= 0;
         end else begin
             // Pipeline shift
-            pipe_valid[0] <= (state == ST_COMPUTE) && i_vec_a_tvalid && i_vec_b_tvalid;
+            pipe_valid[0] <= (state == STCOMPUTE) && i_vec_a_tvalid && i_vec_b_tvalid;
             pipe_valid[1] <= pipe_valid[0];
             pipe_valid[2] <= pipe_valid[1];
             pipe_valid[3] <= pipe_valid[2];
@@ -113,38 +113,39 @@ module distance_compute_unit #(
 
             // State machine
             case (state)
-                ST_IDLE: begin
+                STIDLE: begin
                     if (i_start) begin
-                        state <= ST_COMPUTE;
+                        state <= STCOMPUTE;
                         dim_cnt <= 0;
                         accum <= 0;
                     end
                 end
 
-                ST_COMPUTE: begin
+                STCOMPUTE: begin
                     if (i_vec_a_tvalid && i_vec_b_tvalid) begin
                         dim_cnt <= dim_cnt + 1;
                         if (dim_cnt + 1 >= (i_dim + 15) / 16)
-                            state <= ST_FLUSH;
+                            state <= STFLUSH;
                     end
                 end
 
-                ST_FLUSH: begin
+                STFLUSH: begin
                     if (!pipe_valid[0] && !pipe_valid[1] && !pipe_valid[2] &&
                         !pipe_valid[3] && !pipe_valid[4] && !pipe_valid[5] && !pipe_valid[6])
-                        state <= ST_DONE;
+                        state <= STDONE;
                 end
 
-                ST_DONE: begin
+                STDONE: begin
                     result_reg <= accum[47:16];  // scale back to Q16.16
-                    state <= ST_IDLE;
+                    state <= STIDLE;
                 end
+                default: ;
             endcase
         end
     end
 
-    assign o_valid = (state == ST_DONE);
+    assign o_valid = (state == STDONE);
     assign o_distance = result_reg;
-    assign o_vec_a_tready = (state == ST_COMPUTE);
-    assign o_vec_b_tready = (state == ST_COMPUTE);
+    assign o_vec_a_tready = (state == STCOMPUTE);
+    assign o_vec_b_tready = (state == STCOMPUTE);
 endmodule

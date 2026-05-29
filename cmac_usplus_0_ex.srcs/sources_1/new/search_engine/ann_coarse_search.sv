@@ -1,7 +1,7 @@
 module ann_coarse_search #(
-    parameter NCLUSTERS = 1024,
-    parameter MAX_PROBES = 8,
-    parameter MAX_DIM = 1536
+    parameter int NCLUSTERS = 1024,
+    parameter int MAX_PROBES = 8,
+    parameter int MAX_DIM = 1536
 ) (
     input  wire         clk,
     input  wire         rst,
@@ -37,15 +37,15 @@ module ann_coarse_search #(
 
     // Results
     output wire         o_done,
-    output wire [9:0]   o_cluster_id   [0:MAX_PROBES-1],
-    output wire [15:0]  o_cluster_size [0:MAX_PROBES-1],
+    output wire [9:0]   o_cluster_id   [MAX_PROBES],
+    output wire [15:0]  o_cluster_size [MAX_PROBES],
     output wire [3:0]   o_cluster_count
 );
-    localparam S_IDLE  = 3'd0;
-    localparam S_LOAD  = 3'd1;  // load query into internal buffer
-    localparam S_SCAN  = 3'd2;  // scan centroids through DCU
-    localparam S_WAIT  = 3'd3;  // wait for DCU pipeline drain
-    localparam S_DONE  = 3'd4;
+    localparam logic [2:0] SIDLE = 3'd0;
+    localparam logic [2:0] SLOAD = 3'd1;  // load query into internal buffer
+    localparam logic [2:0] SSCAN = 3'd2;  // scan centroids through DCU
+    localparam logic [2:0] SWAIT = 3'd3;  // wait for DCU pipeline drain
+    localparam logic [2:0] SDONE = 3'd4;
 
     reg [2:0]  state;
     reg [9:0]  cent_idx;         // current centroid index
@@ -53,8 +53,8 @@ module ann_coarse_search #(
     reg [10:0] num_chunks;       // total chunks per vector = ceil(dim/16)
 
     // Top-P registers: maintain sorted list of P smallest distances
-    reg [31:0] best_dist [0:MAX_PROBES-1];
-    reg [9:0]  best_id   [0:MAX_PROBES-1];
+    reg [31:0] best_dist [MAX_PROBES];
+    reg [9:0]  best_id   [MAX_PROBES];
     integer    p_i;  // for loops
 
     // Internal chunk counter for centroid streaming
@@ -66,7 +66,7 @@ module ann_coarse_search #(
 
     always @(posedge clk) begin
         if (rst) begin
-            state <= S_IDLE;
+            state <= SIDLE;
             cent_idx <= 0;
             chunk_cnt <= 0;
             num_chunks <= 0;
@@ -79,9 +79,9 @@ module ann_coarse_search #(
             end
         end else begin
             case (state)
-                S_IDLE: begin
+                SIDLE: begin
                     if (i_start) begin
-                        state <= S_LOAD;
+                        state <= SLOAD;
                         num_chunks <= (i_dim + 15) >> 4;
                         cent_idx <= 0;
                         cent_chunk_cnt <= 0;
@@ -95,13 +95,13 @@ module ann_coarse_search #(
                     end
                 end
 
-                S_LOAD: begin
+                SLOAD: begin
                     // Load query vector into internal buffer.
                     // Wait until all chunks have been received.
                     if (i_query_valid) begin
                         if (chunk_cnt + 1 >= num_chunks) begin
                             query_loaded <= 1;
-                            state <= S_SCAN;
+                            state <= SSCAN;
                             chunk_cnt <= 0;
                         end else begin
                             chunk_cnt <= chunk_cnt + 1;
@@ -109,7 +109,7 @@ module ann_coarse_search #(
                     end
                 end
 
-                S_SCAN: begin
+                SSCAN: begin
                     // Stream centroids: for each centroid, stream num_chunks chunks.
                     // Start a new centroid when previous finishes.
                     if (!cent_active) begin
@@ -128,7 +128,7 @@ module ann_coarse_search #(
                                 cent_idx <= cent_idx + 1;
 
                                 if (cent_idx + 1 >= NCLUSTERS) begin
-                                    state <= S_WAIT;
+                                    state <= SWAIT;
                                 end
                             end else begin
                                 cent_chunk_cnt <= cent_chunk_cnt + 1;
@@ -155,19 +155,20 @@ module ann_coarse_search #(
                     end
                 end
 
-                S_WAIT: begin
+                SWAIT: begin
                     // Wait for any pending DCU result from the last centroid
                     // In practice this may need a small pipeline depth counter.
                     // For now, drain in one cycle (DCU is pipelined but we track
                     // cent_active to know when final result arrives).
                     if (!cent_active) begin
-                        state <= S_DONE;
+                        state <= SDONE;
                     end
                 end
 
-                S_DONE: begin
-                    state <= S_IDLE;
+                SDONE: begin
+                    state <= SIDLE;
                 end
+                default: ;
             endcase
         end
     end
@@ -178,13 +179,13 @@ module ann_coarse_search #(
     // When i_dcu_valid is asserted, we need to conditionally insert the new
     // distance into the sorted list. We implement this with always_comb for
     // the next-state logic of best_dist and best_id.
-    reg [31:0] next_best_dist [0:MAX_PROBES-1];
-    reg [9:0]  next_best_id   [0:MAX_PROBES-1];
+    reg [31:0] next_best_dist [MAX_PROBES];
+    reg [9:0]  next_best_id   [MAX_PROBES];
     reg        do_insert;
     reg [3:0]  insert_idx;
 
     integer ii;
-    always @(*) begin
+    always_comb begin
         // Default: keep current values
         for (ii = 0; ii < MAX_PROBES; ii = ii + 1) begin
             next_best_dist[ii] = best_dist[ii];
@@ -193,7 +194,7 @@ module ann_coarse_search #(
         do_insert = 1'b0;
         insert_idx = 0;
 
-        if (state == S_SCAN && i_dcu_valid) begin
+        if (state == SSCAN && i_dcu_valid) begin
             // Check if new distance qualifies for top-P
             if (cent_idx < i_probes) begin
                 // Not yet P results gathered; always insert at the sorted position
@@ -245,12 +246,12 @@ module ann_coarse_search #(
                 best_dist[ii] <= 32'h7FFF_FFFF;
                 best_id[ii]   <= 0;
             end
-        end else if (state == S_SCAN && i_dcu_valid) begin
+        end else if (state == SSCAN && i_dcu_valid) begin
             for (ii = 0; ii < MAX_PROBES; ii = ii + 1) begin
                 best_dist[ii] <= next_best_dist[ii];
                 best_id[ii]   <= next_best_id[ii];
             end
-        end else if (state == S_IDLE && i_start) begin
+        end else if (state == SIDLE && i_start) begin
             for (ii = 0; ii < MAX_PROBES; ii = ii + 1) begin
                 best_dist[ii] <= 32'h7FFF_FFFF;
                 best_id[ii]   <= 0;
@@ -261,14 +262,14 @@ module ann_coarse_search #(
     // ---------------------------------------------------------------------------
     // Query buffer: store all chunks of the query vector for reuse during scan
     // ---------------------------------------------------------------------------
-    reg [511:0] query_buf [0:(MAX_DIM + 15) / 16 - 1];
+    reg [511:0] query_buf [(MAX_DIM + 15) / 16];
     reg [10:0]  query_buf_waddr;
     reg [10:0]  query_buf_raddr;
 
     always @(posedge clk) begin
         if (rst) begin
             query_buf_waddr <= 0;
-        end else if (state == S_LOAD && i_query_valid) begin
+        end else if (state == SLOAD && i_query_valid) begin
             query_buf[query_buf_waddr] <= i_query_vec_a;
             if (query_buf_waddr + 1 < num_chunks) begin
                 query_buf_waddr <= query_buf_waddr + 1;
@@ -280,7 +281,7 @@ module ann_coarse_search #(
     always @(posedge clk) begin
         if (rst) begin
             query_buf_raddr <= 0;
-        end else if (state == S_SCAN && cent_active && i_dcu_vec_a_ready) begin
+        end else if (state == SSCAN && cent_active && i_dcu_vec_a_ready) begin
             if (query_buf_raddr + 1 >= num_chunks) begin
                 query_buf_raddr <= 0;
             end else begin
@@ -295,27 +296,27 @@ module ann_coarse_search #(
 
     // URAM centroid read: address increments each time a centroid is launched
     assign o_centroid_addr = cent_idx;
-    assign o_centroid_re   = (state == S_SCAN) && !cent_active;
+    assign o_centroid_re   = (state == SSCAN) && !cent_active;
 
     // DCU control
-    assign o_dcu_start     = (state == S_LOAD) && query_loaded;
+    assign o_dcu_start     = (state == SLOAD) && query_loaded;
     assign o_dcu_dim       = i_dim;
     assign o_dcu_metric    = i_metric;
 
     // Query vector being fed to DCU: replay from buffer during scan
-    assign o_dcu_vec_a     = (state == S_SCAN) ? query_buf[query_buf_raddr] : i_query_vec_a;
-    assign o_dcu_vec_a_valid = (state == S_SCAN) && cent_active;
+    assign o_dcu_vec_a     = (state == SSCAN) ? query_buf[query_buf_raddr] : i_query_vec_a;
+    assign o_dcu_vec_a_valid = (state == SSCAN) && cent_active;
 
     // Centroid data forwarding: URAM read data goes to DCU port B
     assign o_dcu_vec_b     = i_centroid_rdata;
-    assign o_dcu_vec_b_valid = (state == S_SCAN) && cent_active;
+    assign o_dcu_vec_b_valid = (state == SSCAN) && cent_active;
     assign o_dcu_vec_b_ready = i_dcu_vec_a_ready;  // both ports must handshake together
 
     // Query ready during LOAD state
-    assign o_query_ready   = (state == S_LOAD);
+    assign o_query_ready   = (state == SLOAD);
 
     // Results
-    assign o_done = (state == S_DONE);
+    assign o_done = (state == SDONE);
     assign o_cluster_count = i_probes;
 
     genvar g;

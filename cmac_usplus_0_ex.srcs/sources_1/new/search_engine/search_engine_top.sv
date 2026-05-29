@@ -56,21 +56,21 @@ module search_engine_top (
 
     // coarse_search → cmd_dispatcher
     wire        coarse_done;
-    wire [9:0]  coarse_cluster_id [0:7];
-    wire [15:0] coarse_cluster_size [0:7];
+    wire [9:0]  coarse_cluster_id [8];
+    wire [15:0] coarse_cluster_size [8];
     wire [3:0]  coarse_cluster_count;
 
     // cmd_dispatcher → scanner
     wire        cmd_to_scanner_start;
-    wire [9:0]  cmd_to_scanner_cluster_id [0:7];
-    wire [15:0] cmd_to_scanner_cluster_size [0:7];
-    wire [31:0] cmd_to_scanner_cluster_base [0:7];
+    wire [9:0]  cmd_to_scanner_cluster_id [8];
+    wire [15:0] cmd_to_scanner_cluster_size [8];
+    wire [31:0] cmd_to_scanner_cluster_base [8];
     wire [3:0]  cmd_to_scanner_cluster_count;
 
     // scanner → cmd_dispatcher
     wire        scanner_done;
-    wire [31:0] scanner_result_dist [0:9];
-    wire [31:0] scanner_result_id   [0:9];
+    wire [31:0] scanner_result_dist [10];
+    wire [31:0] scanner_result_id   [10];
 
     // DCU shared interface
     wire        dcu_start;
