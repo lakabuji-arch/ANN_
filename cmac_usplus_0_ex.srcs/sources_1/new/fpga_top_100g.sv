@@ -304,6 +304,30 @@ module fpga_top_100g (
         .ddr4_rtl_0_dqs_c        (ddr4_rtl_0_dqs_c),     .ddr4_rtl_0_dqs_t        (ddr4_rtl_0_dqs_t),
         .ddr4_rtl_0_odt          (ddr4_rtl_0_odt),       .ddr4_rtl_0_reset_n      (ddr4_rtl_0_reset_n),
 
+        .M_AXIS_CH3_tdata        (ch3_tdata_322),
+        .M_AXIS_CH3_tkeep        (ch3_tkeep_322),
+        .M_AXIS_CH3_tvalid       (ch3_tvalid_322),
+        .M_AXIS_CH3_tlast        (ch3_tlast_322),
+        .M_AXIS_CH3_tready       (ch3_tready_322),
+        .M_AXIS_CH4_tdata        (ch4_tdata_322),
+        .M_AXIS_CH4_tkeep        (ch4_tkeep_322),
+        .M_AXIS_CH4_tvalid       (ch4_tvalid_322),
+        .M_AXIS_CH4_tlast        (ch4_tlast_322),
+        .M_AXIS_CH4_tready       (ch4_tready_322),
+
+        .S_AXI_SEARCH_araddr     (search_m_axi_araddr),
+        .S_AXI_SEARCH_arvalid    (search_m_axi_arvalid),
+        .S_AXI_SEARCH_arready    (search_m_axi_arready),
+        .S_AXI_SEARCH_rdata      (search_m_axi_rdata),
+        .S_AXI_SEARCH_rvalid     (search_m_axi_rvalid),
+        .S_AXI_SEARCH_rready     (search_m_axi_rready),
+        .S_AXI_SEARCH_awaddr     (search_m_axi_awaddr),
+        .S_AXI_SEARCH_awvalid    (search_m_axi_awvalid),
+        .S_AXI_SEARCH_awready    (search_m_axi_awready),
+        .S_AXI_SEARCH_wdata      (search_m_axi_wdata),
+        .S_AXI_SEARCH_wvalid     (search_m_axi_wvalid),
+        .S_AXI_SEARCH_wready     (search_m_axi_wready),
+
         .S_AXIS_RX_tdata         (axis_rx_tdata),        .S_AXIS_RX_tkeep         (axis_rx_tkeep),
         .S_AXIS_RX_tvalid        (axis_rx_tvalid),       .S_AXIS_RX_tlast         (axis_rx_tlast),
         .S_AXIS_RX_tready        (axis_rx_tready),
@@ -509,5 +533,130 @@ module fpga_top_100g (
         end
     end
     assign led_out[3] = mm2s_err_latch ? 1'b1 : mm2s_act_led;
+
+    // =========================================================================
+    // Vector Search Engine Integration
+    // =========================================================================
+    //
+    // Ch3 (UDP:8001) = control plane: SEARCH/INSERT/REINDEX/GET_STATUS
+    // Ch4 (UDP:8002) = data plane: bulk vector transfer
+    //
+    // Both route through xpm_fifo_async CDC (322MHz → 333MHz for commands,
+    // 333MHz → 322MHz for responses)
+
+    wire [511:0] ch3_tdata_322, ch4_tdata_322;
+    wire [63:0]  ch3_tkeep_322, ch4_tkeep_322;
+    wire         ch3_tvalid_322, ch4_tvalid_322;
+    wire         ch3_tlast_322,  ch4_tlast_322;
+    wire         ch3_tready_322, ch4_tready_322;
+
+    // ─── CDC: Ch3 command (322→333) ───
+    wire [511:0] search_cmd_tdata_333;
+    wire         search_cmd_tvalid_333;
+    wire         search_cmd_tready_333;
+
+    xpm_fifo_async #(
+        .FIFO_MEMORY_TYPE("block"), .FIFO_READ_LATENCY(0),
+        .FIFO_WRITE_DEPTH(32), .READ_MODE("fwft"),
+        .READ_DATA_WIDTH(512), .WRITE_DATA_WIDTH(512), .CDC_SYNC_STAGES(3)
+    ) u_search_cmd_cdc (
+        .rst(~usr_mac_rst_n),
+        .wr_clk(usr_mac_clk),    .wr_en(ch3_tvalid_322 && ch3_tready_322),
+        .din(ch3_tdata_322),
+        .rd_clk(c0_ddr4_ui_clk), .rd_en(search_cmd_tready_333),
+        .dout(search_cmd_tdata_333),
+        .empty(!search_cmd_tvalid_333),
+        .sleep(1'b0)
+    );
+    assign ch3_tready_322 = 1'b1;  // always ready to accept Ch3
+
+    // ─── CDC: Ch4 data (322→333) ───
+    wire [511:0] search_data_tdata_333;
+    wire         search_data_tvalid_333;
+    wire         search_data_tready_333;
+
+    xpm_fifo_async #(
+        .FIFO_MEMORY_TYPE("block"), .FIFO_READ_LATENCY(0),
+        .FIFO_WRITE_DEPTH(128), .READ_MODE("fwft"),
+        .READ_DATA_WIDTH(512), .WRITE_DATA_WIDTH(512), .CDC_SYNC_STAGES(3)
+    ) u_search_data_cdc (
+        .rst(~usr_mac_rst_n),
+        .wr_clk(usr_mac_clk),    .wr_en(ch4_tvalid_322 && ch4_tready_322),
+        .din(ch4_tdata_322),
+        .rd_clk(c0_ddr4_ui_clk), .rd_en(search_data_tready_333),
+        .dout(search_data_tdata_333),
+        .empty(!search_data_tvalid_333),
+        .sleep(1'b0)
+    );
+    assign ch4_tready_322 = 1'b1;
+
+    // ─── CDC: Response (333→322) ───
+    wire [511:0] search_resp_tdata_333, search_resp_tdata_322;
+    wire         search_resp_tvalid_333, search_resp_tvalid_322;
+    wire         search_resp_tready_333;
+    wire         search_resp_empty_322;
+
+    xpm_fifo_async #(
+        .FIFO_MEMORY_TYPE("block"), .FIFO_READ_LATENCY(0),
+        .FIFO_WRITE_DEPTH(32), .READ_MODE("fwft"),
+        .READ_DATA_WIDTH(512), .WRITE_DATA_WIDTH(512), .CDC_SYNC_STAGES(3)
+    ) u_search_resp_cdc (
+        .rst(~ddr4_rst_n),
+        .wr_clk(c0_ddr4_ui_clk), .wr_en(search_resp_tvalid_333 && search_resp_tready_333),
+        .din(search_resp_tdata_333),
+        .rd_clk(usr_mac_clk),    .rd_en(!search_resp_empty_322),
+        .dout(search_resp_tdata_322),
+        .empty(search_resp_empty_322),
+        .sleep(1'b0)
+    );
+    assign search_resp_tvalid_322 = !search_resp_empty_322;
+
+    // ─── Search Engine Instantiation (c0_ddr4_ui_clk domain) ───
+    wire [31:0]  search_m_axi_araddr, search_m_axi_awaddr;
+    wire         search_m_axi_arvalid, search_m_axi_awvalid;
+    wire         search_m_axi_arready, search_m_axi_awready;
+    wire [511:0] search_m_axi_rdata, search_m_axi_wdata;
+    wire         search_m_axi_rvalid, search_m_axi_wvalid;
+    wire         search_m_axi_rready, search_m_axi_wready;
+    wire [31:0]  search_status_monitor;
+    wire         search_active;
+
+    search_engine_top u_search_engine (
+        .ddr4_ui_clk         (c0_ddr4_ui_clk),
+        .ddr4_ui_rst         (!ddr4_rst_n),
+
+        // AXI → ddr4_subsystem_top
+        .m_axi_araddr        (search_m_axi_araddr),
+        .m_axi_arvalid       (search_m_axi_arvalid),
+        .m_axi_arready       (search_m_axi_arready),
+        .m_axi_rdata         (search_m_axi_rdata),
+        .m_axi_rvalid        (search_m_axi_rvalid),
+        .m_axi_rready        (search_m_axi_rready),
+        .m_axi_awaddr        (search_m_axi_awaddr),
+        .m_axi_awvalid       (search_m_axi_awvalid),
+        .m_axi_awready       (search_m_axi_awready),
+        .m_axi_wdata         (search_m_axi_wdata),
+        .m_axi_wvalid        (search_m_axi_wvalid),
+        .m_axi_wready        (search_m_axi_wready),
+
+        // CDC: command from UDP:8001
+        .s_axis_cmd_tdata    (search_cmd_tdata_333),
+        .s_axis_cmd_tvalid   (search_cmd_tvalid_333),
+        .s_axis_cmd_tready   (search_cmd_tready_333),
+        .m_axis_resp_tdata   (search_resp_tdata_333),
+        .m_axis_resp_tvalid  (search_resp_tvalid_333),
+        .m_axis_resp_tready  (search_resp_tready_333),
+
+        // CDC: data from UDP:8002
+        .s_axis_data_tdata   (search_data_tdata_333),
+        .s_axis_data_tvalid  (search_data_tvalid_333),
+        .s_axis_data_tready  (search_data_tready_333),
+        .m_axis_data_tdata   (),  // data plane output (unused for now)
+        .m_axis_data_tvalid  (),
+        .m_axis_data_tready  (1'b1),
+
+        .o_status_monitor    (search_status_monitor),
+        .o_search_active     (search_active)
+    );
 
 endmodule
