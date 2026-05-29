@@ -95,7 +95,14 @@ module cmac_100g_wrapper (
     input  wire         stat_mm2s_err,
 
     // =========================================================================
-    // 8. UDP/配置寄存器 AXI4-Lite 接口
+    // 8. Network config exposed (for external rx_demux / search engine)
+    // =========================================================================
+    output wire [47:0] o_cfg_local_mac,
+    output wire [31:0] o_cfg_local_ip,
+    output wire        o_cfg_vlan_enable,
+
+    // =========================================================================
+    // 9. UDP/配置寄存器 AXI4-Lite 接口
     // =========================================================================
     input  wire [31:0] s_udp_cfg_axi_awaddr,  
     input  wire        s_udp_cfg_axi_awvalid, 
@@ -174,7 +181,11 @@ module cmac_100g_wrapper (
     wire [15:0] cfg_src_port;              
     wire [15:0] cfg_dest_port;             
     wire [15:0] cfg_udp_payload_beats; // 虽然废弃不用，但保留线网防止 Config Slave 报错
-    wire        cfg_vlan_enable;           
+    wire        cfg_vlan_enable;
+
+    assign o_cfg_local_mac   = cfg_local_mac;
+    assign o_cfg_local_ip    = cfg_local_ip;
+    assign o_cfg_vlan_enable = cfg_vlan_enable;
 
     // --- 统计信号 ---
     wire [31:0] stat_cnt_rx_arp;

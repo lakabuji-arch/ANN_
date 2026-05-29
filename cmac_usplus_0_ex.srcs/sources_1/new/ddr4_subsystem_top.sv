@@ -29,20 +29,6 @@ module ddr4_subsystem_top (
     output wire [0:0]   ddr4_rtl_0_odt,
     output wire         ddr4_rtl_0_reset_n,
 
-    // UDP:8001 control plane (rx_demux Ch3), usr_mac_clk domain
-    output wire [511:0] M_AXIS_CH3_tdata,
-    output wire [63:0]  M_AXIS_CH3_tkeep,
-    output wire         M_AXIS_CH3_tvalid,
-    output wire         M_AXIS_CH3_tlast,
-    input  wire         M_AXIS_CH3_tready,
-
-    // UDP:8002 data plane (rx_demux Ch4), usr_mac_clk domain
-    output wire [511:0] M_AXIS_CH4_tdata,
-    output wire [63:0]  M_AXIS_CH4_tkeep,
-    output wire         M_AXIS_CH4_tvalid,
-    output wire         M_AXIS_CH4_tlast,
-    input  wire         M_AXIS_CH4_tready,
-
     // AXI4 for search_engine_top (c0_ddr4_ui_clk domain)
     // AXI4 Read Address
     input  wire [31:0]  S_AXI_SEARCH_araddr,
@@ -398,16 +384,6 @@ module ddr4_subsystem_top (
     //      - existing AXI Datamover S_AXI
     //      - new S_AXI_SEARCH_* port
     // =========================================================================
-
-    // Ch3/Ch4 pass-through (temporary: drive as idle until BD is updated)
-    assign M_AXIS_CH3_tdata  = 512'd0;
-    assign M_AXIS_CH3_tkeep  = 64'd0;
-    assign M_AXIS_CH3_tvalid = 1'b0;
-    assign M_AXIS_CH3_tlast  = 1'b0;
-    assign M_AXIS_CH4_tdata  = 512'd0;
-    assign M_AXIS_CH4_tkeep  = 64'd0;
-    assign M_AXIS_CH4_tvalid = 1'b0;
-    assign M_AXIS_CH4_tlast  = 1'b0;
 
     // AXI Search — wired through BD to smartconnect_0/S02_AXI → MIG
     // Outputs from BD (tied low until BD synthesis)

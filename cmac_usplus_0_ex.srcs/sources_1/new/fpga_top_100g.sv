@@ -52,6 +52,18 @@ module fpga_top_100g (
     wire [15:0]  rx_payload_bytes_322m;
     wire [15:0]  tx_framer_bytes_333m;
     wire         mac_link_up;
+
+    // Network config (from cmac_wrapper for standalone rx_demux)
+    wire [47:0] cfg_local_mac;
+    wire [31:0] cfg_local_ip;
+    wire        cfg_vlan_enable;
+
+    // Standalone rx_demux Ch3/Ch4 outputs (for search engine CDC)
+    wire [511:0] srx_ch3_tdata, srx_ch4_tdata;
+    wire [63:0]  srx_ch3_tkeep, srx_ch4_tkeep;
+    wire         srx_ch3_tvalid, srx_ch4_tvalid;
+    wire         srx_ch3_tlast,  srx_ch4_tlast;
+    wire         srx_ch3_tready, srx_ch4_tready;
     wire s2mm_err, mm2s_err;
     wire         tx_meta_rd_en_framer; // Framer 发出的元数据推进脉冲
 
@@ -284,7 +296,53 @@ module fpga_top_100g (
         .stat_rx_wr_count    (stat_rx_wr_count_322),
         .stat_tx_wr_count    (stat_tx_wr_count_322),
         .stat_s2mm_err       (stat_s2mm_err_322),
-        .stat_mm2s_err       (stat_mm2s_err_322)
+        .stat_mm2s_err       (stat_mm2s_err_322),
+        .o_cfg_local_mac     (cfg_local_mac),
+        .o_cfg_local_ip      (cfg_local_ip),
+        .o_cfg_vlan_enable   (cfg_vlan_enable)
+    );
+
+    // =========================================================================
+    // Standalone rx_demux for search engine (Ch3:UDP:8001, Ch4:UDP:8002)
+    // Listens on the same AXIS RX as the BD, extracts Ch3/Ch4 independently
+    // =========================================================================
+    rx_demux u_rx_demux_search (
+        .clk                (usr_mac_clk),
+        .rst_n              (usr_mac_rst_n),
+        .cfg_vlan_enable    (cfg_vlan_enable),
+        .cfg_local_mac      (cfg_local_mac),
+        .cfg_local_ip       (cfg_local_ip),
+        .s_axis_tdata       (axis_rx_tdata),
+        .s_axis_tkeep       (axis_rx_tkeep),
+        .s_axis_tvalid      (axis_rx_tvalid),
+        .s_axis_tlast       (axis_rx_tlast),
+        .s_axis_rx_err      (1'b0),
+        // Only Ch3 (UDP:8001) and Ch4 (UDP:8002) used; others left open
+        .m0_axis_tdata      (),
+        .m0_axis_tvalid     (),
+        .m0_axis_tlast      (),
+        .m1_axis_tdata      (),
+        .m1_axis_tkeep      (),
+        .m1_axis_tvalid     (),
+        .m1_axis_tlast      (),
+        .m2_axis_tdata      (),
+        .m2_axis_tkeep      (),
+        .m2_axis_tvalid     (),
+        .m2_axis_tlast      (),
+        .m3_axis_tdata      (srx_ch3_tdata),
+        .m3_axis_tkeep      (srx_ch3_tkeep),
+        .m3_axis_tvalid     (srx_ch3_tvalid),
+        .m3_axis_tlast      (srx_ch3_tlast),
+        .m4_axis_tdata      (srx_ch4_tdata),
+        .m4_axis_tkeep      (srx_ch4_tkeep),
+        .m4_axis_tvalid     (srx_ch4_tvalid),
+        .m4_axis_tlast      (srx_ch4_tlast),
+        .o_stat_rx_arp      (),
+        .o_stat_rx_icmp     (),
+        .o_stat_rx_udp      (),
+        .o_stat_rx_cmd      (),
+        .o_stat_rx_drop     (),
+        .o_stat_rx_err      ()
     );
 
     ddr4_subsystem_top u_bd_wrapper (
@@ -304,16 +362,6 @@ module fpga_top_100g (
         .ddr4_rtl_0_dqs_c        (ddr4_rtl_0_dqs_c),     .ddr4_rtl_0_dqs_t        (ddr4_rtl_0_dqs_t),
         .ddr4_rtl_0_odt          (ddr4_rtl_0_odt),       .ddr4_rtl_0_reset_n      (ddr4_rtl_0_reset_n),
 
-        .M_AXIS_CH3_tdata        (ch3_tdata_322),
-        .M_AXIS_CH3_tkeep        (ch3_tkeep_322),
-        .M_AXIS_CH3_tvalid       (ch3_tvalid_322),
-        .M_AXIS_CH3_tlast        (ch3_tlast_322),
-        .M_AXIS_CH3_tready       (ch3_tready_322),
-        .M_AXIS_CH4_tdata        (ch4_tdata_322),
-        .M_AXIS_CH4_tkeep        (ch4_tkeep_322),
-        .M_AXIS_CH4_tvalid       (ch4_tvalid_322),
-        .M_AXIS_CH4_tlast        (ch4_tlast_322),
-        .M_AXIS_CH4_tready       (ch4_tready_322),
 
         // AXI4 Read
         .S_AXI_SEARCH_araddr     (search_m_axi_araddr),
@@ -569,12 +617,6 @@ module fpga_top_100g (
     // Both route through xpm_fifo_async CDC (322MHz → 333MHz for commands,
     // 333MHz → 322MHz for responses)
 
-    wire [511:0] ch3_tdata_322, ch4_tdata_322;
-    wire [63:0]  ch3_tkeep_322, ch4_tkeep_322;
-    wire         ch3_tvalid_322, ch4_tvalid_322;
-    wire         ch3_tlast_322,  ch4_tlast_322;
-    wire         ch3_tready_322, ch4_tready_322;
-
     // ─── CDC: Ch3 command (322→333) ───
     wire [511:0] search_cmd_tdata_333;
     wire         search_cmd_tvalid_333;
@@ -586,14 +628,13 @@ module fpga_top_100g (
         .READ_DATA_WIDTH(512), .WRITE_DATA_WIDTH(512), .CDC_SYNC_STAGES(3)
     ) u_search_cmd_cdc (
         .rst(~usr_mac_rst_n),
-        .wr_clk(usr_mac_clk),    .wr_en(ch3_tvalid_322 && ch3_tready_322),
-        .din(ch3_tdata_322),
+        .wr_clk(usr_mac_clk),    .wr_en(srx_ch3_tvalid),
+        .din(srx_ch3_tdata),
         .rd_clk(c0_ddr4_ui_clk), .rd_en(search_cmd_tready_333),
         .dout(search_cmd_tdata_333),
         .empty(!search_cmd_tvalid_333),
         .sleep(1'b0)
     );
-    assign ch3_tready_322 = 1'b1;  // always ready to accept Ch3
 
     // ─── CDC: Ch4 data (322→333) ───
     wire [511:0] search_data_tdata_333;
@@ -606,14 +647,13 @@ module fpga_top_100g (
         .READ_DATA_WIDTH(512), .WRITE_DATA_WIDTH(512), .CDC_SYNC_STAGES(3)
     ) u_search_data_cdc (
         .rst(~usr_mac_rst_n),
-        .wr_clk(usr_mac_clk),    .wr_en(ch4_tvalid_322 && ch4_tready_322),
-        .din(ch4_tdata_322),
+        .wr_clk(usr_mac_clk),    .wr_en(srx_ch4_tvalid),
+        .din(srx_ch4_tdata),
         .rd_clk(c0_ddr4_ui_clk), .rd_en(search_data_tready_333),
         .dout(search_data_tdata_333),
         .empty(!search_data_tvalid_333),
         .sleep(1'b0)
     );
-    assign ch4_tready_322 = 1'b1;
 
     // ─── CDC: Response (333→322) ───
     wire [511:0] search_resp_tdata_333, search_resp_tdata_322;
