@@ -51,3 +51,11 @@ reports/
 # OS
 .DS_Store
 Thumbs.db
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Sim build artifacts
+sim_work/sim_build/
+sim_build/
