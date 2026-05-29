@@ -17,12 +17,14 @@ def q2f(v):
 async def insert_and_wait(dut, distances, ids, k):
     dut.i_k.value = k
     for d, vid in zip(distances, ids):
+        # Push one value, hold for 1 cycle, then wait for sift to complete
         dut.i_push.value = 1
         dut.i_distance.value = f2q(d)
         dut.i_vector_id.value = vid
         await RisingEdge(dut.clk)
-    dut.i_push.value = 0
-    await ClockCycles(dut.clk, 30)
+        dut.i_push.value = 0
+        # Wait for sift to finish (max depth log2(256)=8, 20 cycles is plenty)
+        await ClockCycles(dut.clk, 20)
 
 async def read_all(dut):
     results = []
