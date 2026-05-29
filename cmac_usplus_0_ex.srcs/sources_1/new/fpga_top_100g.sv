@@ -327,6 +327,12 @@ module fpga_top_100g (
         .S_AXI_SEARCH_wdata      (search_m_axi_wdata),
         .S_AXI_SEARCH_wvalid     (search_m_axi_wvalid),
         .S_AXI_SEARCH_wready     (search_m_axi_wready),
+        .S_AXI_SEARCH_bresp      (),
+        .S_AXI_SEARCH_bvalid     (),
+        .S_AXI_SEARCH_bready     (1'b1),
+        .S_AXI_SEARCH_rresp      (),
+        .S_AXI_SEARCH_aruser     (32'd0),
+        .S_AXI_SEARCH_awuser     (32'd0),
 
         .S_AXIS_RX_tdata         (axis_rx_tdata),        .S_AXIS_RX_tkeep         (axis_rx_tkeep),
         .S_AXIS_RX_tvalid        (axis_rx_tvalid),       .S_AXIS_RX_tlast         (axis_rx_tlast),

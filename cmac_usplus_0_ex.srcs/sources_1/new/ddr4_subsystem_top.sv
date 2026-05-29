@@ -56,6 +56,14 @@ module ddr4_subsystem_top (
     input  wire [511:0] S_AXI_SEARCH_wdata,
     input  wire         S_AXI_SEARCH_wvalid,
     output wire         S_AXI_SEARCH_wready,
+    // Write Response
+    output wire [1:0]   S_AXI_SEARCH_bresp,
+    output wire         S_AXI_SEARCH_bvalid,
+    input  wire         S_AXI_SEARCH_bready,
+    // Read Response
+    output wire [1:0]   S_AXI_SEARCH_rresp,
+    input  wire [31:0]  S_AXI_SEARCH_aruser,
+    input  wire [31:0]  S_AXI_SEARCH_awuser,
 
     // AXI-Stream RX (来自CMAC, usr_mac_clk域)
     input  wire [511:0] S_AXIS_RX_tdata,
@@ -383,11 +391,15 @@ module ddr4_subsystem_top (
     assign M_AXIS_CH4_tvalid = 1'b0;
     assign M_AXIS_CH4_tlast  = 1'b0;
 
-    // AXI Search pass-through (temporary: idle until BD is updated)
+    // AXI Search — BD-internal SmartConnect S02 connection pending Vivado synthesis
+    // In Vivado: Connect S_AXI_SEARCH → smartconnect_0/S02_AXI (see .bd JSON update)
     assign S_AXI_SEARCH_arready = 1'b0;
     assign S_AXI_SEARCH_rdata   = 512'd0;
     assign S_AXI_SEARCH_rvalid  = 1'b0;
+    assign S_AXI_SEARCH_rresp   = 2'b00;
     assign S_AXI_SEARCH_awready = 1'b0;
     assign S_AXI_SEARCH_wready  = 1'b0;
+    assign S_AXI_SEARCH_bresp   = 2'b00;
+    assign S_AXI_SEARCH_bvalid  = 1'b0;
 
 endmodule

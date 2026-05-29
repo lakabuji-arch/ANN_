@@ -199,6 +199,99 @@
           }
         }
       },
+      "S_AXI_SEARCH": {
+        "mode": "Slave",
+        "vlnv_bus_definition": "xilinx.com:interface:aximm:1.0",
+        "vlnv": "xilinx.com:interface:aximm_rtl:1.0",
+        "parameters": {
+          "NUM_READ_OUTSTANDING": {
+            "value": "2",
+            "value_src": "default"
+          },
+          "NUM_WRITE_OUTSTANDING": {
+            "value": "2",
+            "value_src": "default"
+          }
+        },
+        "port_maps": {
+          "ARADDR": {
+            "physical_name": "S_AXI_SEARCH_araddr",
+            "direction": "I",
+            "left": "31",
+            "right": "0"
+          },
+          "ARREADY": {
+            "physical_name": "S_AXI_SEARCH_arready",
+            "direction": "O"
+          },
+          "ARVALID": {
+            "physical_name": "S_AXI_SEARCH_arvalid",
+            "direction": "I"
+          },
+          "AWADDR": {
+            "physical_name": "S_AXI_SEARCH_awaddr",
+            "direction": "I",
+            "left": "31",
+            "right": "0"
+          },
+          "AWREADY": {
+            "physical_name": "S_AXI_SEARCH_awready",
+            "direction": "O"
+          },
+          "AWVALID": {
+            "physical_name": "S_AXI_SEARCH_awvalid",
+            "direction": "I"
+          },
+          "BREADY": {
+            "physical_name": "S_AXI_SEARCH_bready",
+            "direction": "I"
+          },
+          "BRESP": {
+            "physical_name": "S_AXI_SEARCH_bresp",
+            "direction": "O",
+            "left": "1",
+            "right": "0"
+          },
+          "BVALID": {
+            "physical_name": "S_AXI_SEARCH_bvalid",
+            "direction": "O"
+          },
+          "RDATA": {
+            "physical_name": "S_AXI_SEARCH_rdata",
+            "direction": "O",
+            "left": "511",
+            "right": "0"
+          },
+          "RREADY": {
+            "physical_name": "S_AXI_SEARCH_rready",
+            "direction": "I"
+          },
+          "RRESP": {
+            "physical_name": "S_AXI_SEARCH_rresp",
+            "direction": "O",
+            "left": "1",
+            "right": "0"
+          },
+          "RVALID": {
+            "physical_name": "S_AXI_SEARCH_rvalid",
+            "direction": "O"
+          },
+          "WDATA": {
+            "physical_name": "S_AXI_SEARCH_wdata",
+            "direction": "I",
+            "left": "511",
+            "right": "0"
+          },
+          "WREADY": {
+            "physical_name": "S_AXI_SEARCH_wready",
+            "direction": "O"
+          },
+          "WVALID": {
+            "physical_name": "S_AXI_SEARCH_wvalid",
+            "direction": "I"
+          }
+        }
+      },
       "S_AXIS_S2MM_0": {
         "mode": "Slave",
         "vlnv_bus_definition": "xilinx.com:interface:axis:1.0",
@@ -779,6 +872,32 @@
               }
             }
           },
+          "S02_AXI": {
+            "mode": "Slave",
+            "vlnv_bus_definition": "xilinx.com:interface:aximm:1.0",
+            "vlnv": "xilinx.com:interface:aximm_rtl:1.0",
+            "parameters": {
+              "NUM_READ_OUTSTANDING": {
+                "value": "2"
+              },
+              "NUM_WRITE_OUTSTANDING": {
+                "value": "2"
+              }
+            },
+            "bridges": [
+              "M00_AXI"
+            ],
+            "bd_attributes": {
+              "BRIDGES": {
+                "value": "M00_AXI",
+                "value_src": "auto"
+              },
+              "TYPE": {
+                "value": "interior",
+                "value_src": "default"
+              }
+            }
+          },
           "M00_AXI": {
             "mode": "Master",
             "vlnv_bus_definition": "xilinx.com:interface:aximm:1.0",
@@ -1029,6 +1148,12 @@
         "interface_ports": [
           "C0_DDR4_0",
           "ddr4_0/C0_DDR4"
+        ]
+      },
+      "S_AXI_SEARCH_1": {
+        "interface_ports": [
+          "S_AXI_SEARCH",
+          "smartconnect_0/S02_AXI"
         ]
       },
       "smartconnect_0_M00_AXI": {
