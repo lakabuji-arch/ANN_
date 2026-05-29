@@ -44,26 +44,44 @@ module ddr4_subsystem_top (
     input  wire         M_AXIS_CH4_tready,
 
     // AXI4 for search_engine_top (c0_ddr4_ui_clk domain)
+    // AXI4 Read Address
     input  wire [31:0]  S_AXI_SEARCH_araddr,
-    input  wire         S_AXI_SEARCH_arvalid,
+    input  wire [1:0]   S_AXI_SEARCH_arburst,
+    input  wire [3:0]   S_AXI_SEARCH_arcache,
+    input  wire [7:0]   S_AXI_SEARCH_arlen,
+    input  wire [0:0]   S_AXI_SEARCH_arlock,
+    input  wire [2:0]   S_AXI_SEARCH_arprot,
+    input  wire [3:0]   S_AXI_SEARCH_arqos,
     output wire         S_AXI_SEARCH_arready,
-    output wire [511:0] S_AXI_SEARCH_rdata,
-    output wire         S_AXI_SEARCH_rvalid,
-    input  wire         S_AXI_SEARCH_rready,
+    input  wire [2:0]   S_AXI_SEARCH_arsize,
+    input  wire         S_AXI_SEARCH_arvalid,
+    // AXI4 Write Address
     input  wire [31:0]  S_AXI_SEARCH_awaddr,
-    input  wire         S_AXI_SEARCH_awvalid,
+    input  wire [1:0]   S_AXI_SEARCH_awburst,
+    input  wire [3:0]   S_AXI_SEARCH_awcache,
+    input  wire [7:0]   S_AXI_SEARCH_awlen,
+    input  wire [0:0]   S_AXI_SEARCH_awlock,
+    input  wire [2:0]   S_AXI_SEARCH_awprot,
+    input  wire [3:0]   S_AXI_SEARCH_awqos,
     output wire         S_AXI_SEARCH_awready,
-    input  wire [511:0] S_AXI_SEARCH_wdata,
-    input  wire         S_AXI_SEARCH_wvalid,
-    output wire         S_AXI_SEARCH_wready,
+    input  wire [2:0]   S_AXI_SEARCH_awsize,
+    input  wire         S_AXI_SEARCH_awvalid,
     // Write Response
     output wire [1:0]   S_AXI_SEARCH_bresp,
     output wire         S_AXI_SEARCH_bvalid,
     input  wire         S_AXI_SEARCH_bready,
-    // Read Response
+    // Read Data
+    output wire [511:0] S_AXI_SEARCH_rdata,
+    output wire         S_AXI_SEARCH_rlast,
     output wire [1:0]   S_AXI_SEARCH_rresp,
-    input  wire [31:0]  S_AXI_SEARCH_aruser,
-    input  wire [31:0]  S_AXI_SEARCH_awuser,
+    output wire         S_AXI_SEARCH_rvalid,
+    input  wire         S_AXI_SEARCH_rready,
+    // Write Data
+    input  wire [511:0] S_AXI_SEARCH_wdata,
+    input  wire         S_AXI_SEARCH_wlast,
+    output wire         S_AXI_SEARCH_wready,
+    input  wire [63:0]  S_AXI_SEARCH_wstrb,
+    input  wire         S_AXI_SEARCH_wvalid,
 
     // AXI-Stream RX (来自CMAC, usr_mac_clk域)
     input  wire [511:0] S_AXIS_RX_tdata,
@@ -391,15 +409,16 @@ module ddr4_subsystem_top (
     assign M_AXIS_CH4_tvalid = 1'b0;
     assign M_AXIS_CH4_tlast  = 1'b0;
 
-    // AXI Search — BD-internal SmartConnect S02 connection pending Vivado synthesis
-    // In Vivado: Connect S_AXI_SEARCH → smartconnect_0/S02_AXI (see .bd JSON update)
+    // AXI Search — wired through BD to smartconnect_0/S02_AXI → MIG
+    // Outputs from BD (tied low until BD synthesis)
     assign S_AXI_SEARCH_arready = 1'b0;
-    assign S_AXI_SEARCH_rdata   = 512'd0;
-    assign S_AXI_SEARCH_rvalid  = 1'b0;
-    assign S_AXI_SEARCH_rresp   = 2'b00;
     assign S_AXI_SEARCH_awready = 1'b0;
     assign S_AXI_SEARCH_wready  = 1'b0;
     assign S_AXI_SEARCH_bresp   = 2'b00;
     assign S_AXI_SEARCH_bvalid  = 1'b0;
+    assign S_AXI_SEARCH_rdata   = 512'd0;
+    assign S_AXI_SEARCH_rlast   = 1'b0;
+    assign S_AXI_SEARCH_rresp   = 2'b00;
+    assign S_AXI_SEARCH_rvalid  = 1'b0;
 
 endmodule

@@ -315,24 +315,43 @@ module fpga_top_100g (
         .M_AXIS_CH4_tlast        (ch4_tlast_322),
         .M_AXIS_CH4_tready       (ch4_tready_322),
 
+        // AXI4 Read
         .S_AXI_SEARCH_araddr     (search_m_axi_araddr),
-        .S_AXI_SEARCH_arvalid    (search_m_axi_arvalid),
+        .S_AXI_SEARCH_arburst    (2'b01),      // INCR
+        .S_AXI_SEARCH_arcache    (4'd0),
+        .S_AXI_SEARCH_arlen      (8'd0),       // single beat
+        .S_AXI_SEARCH_arlock     (1'b0),
+        .S_AXI_SEARCH_arprot     (3'd0),
+        .S_AXI_SEARCH_arqos      (4'd0),
         .S_AXI_SEARCH_arready    (search_m_axi_arready),
+        .S_AXI_SEARCH_arsize     (3'd6),       // 64 bytes = 512 bits
+        .S_AXI_SEARCH_arvalid    (search_m_axi_arvalid),
+        // AXI4 Read Data
         .S_AXI_SEARCH_rdata      (search_m_axi_rdata),
+        .S_AXI_SEARCH_rlast      (),            // unused
+        .S_AXI_SEARCH_rresp      (),
         .S_AXI_SEARCH_rvalid     (search_m_axi_rvalid),
         .S_AXI_SEARCH_rready     (search_m_axi_rready),
+        // AXI4 Write
         .S_AXI_SEARCH_awaddr     (search_m_axi_awaddr),
-        .S_AXI_SEARCH_awvalid    (search_m_axi_awvalid),
+        .S_AXI_SEARCH_awburst    (2'b01),
+        .S_AXI_SEARCH_awcache    (4'd0),
+        .S_AXI_SEARCH_awlen      (8'd0),
+        .S_AXI_SEARCH_awlock     (1'b0),
+        .S_AXI_SEARCH_awprot     (3'd0),
+        .S_AXI_SEARCH_awqos      (4'd0),
         .S_AXI_SEARCH_awready    (search_m_axi_awready),
+        .S_AXI_SEARCH_awsize     (3'd6),
+        .S_AXI_SEARCH_awvalid    (search_m_axi_awvalid),
         .S_AXI_SEARCH_wdata      (search_m_axi_wdata),
-        .S_AXI_SEARCH_wvalid     (search_m_axi_wvalid),
+        .S_AXI_SEARCH_wlast      (1'b1),       // last beat (single beat)
         .S_AXI_SEARCH_wready     (search_m_axi_wready),
+        .S_AXI_SEARCH_wstrb      (64'hFFFF_FFFF_FFFF_FFFF),  // all bytes valid
+        .S_AXI_SEARCH_wvalid     (search_m_axi_wvalid),
+        // Write Response
         .S_AXI_SEARCH_bresp      (),
         .S_AXI_SEARCH_bvalid     (),
-        .S_AXI_SEARCH_bready     (1'b1),
-        .S_AXI_SEARCH_rresp      (),
-        .S_AXI_SEARCH_aruser     (32'd0),
-        .S_AXI_SEARCH_awuser     (32'd0),
+        .S_AXI_SEARCH_bready     (1'b1),       // always ready
 
         .S_AXIS_RX_tdata         (axis_rx_tdata),        .S_AXIS_RX_tkeep         (axis_rx_tkeep),
         .S_AXIS_RX_tvalid        (axis_rx_tvalid),       .S_AXIS_RX_tlast         (axis_rx_tlast),
