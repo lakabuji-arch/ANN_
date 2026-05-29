@@ -77,10 +77,10 @@ module index_manager #(
                 end
             end
 
-            // Zone switch
+            // Zone switch: new standby = old active
             if (i_reindex_switch) begin
                 active_zone <= ~active_zone;
-                standby_tail <= active_zone ? ZONE_A_BASE : ZONE_B_BASE;
+                standby_tail <= active_zone ? ZONE_B_BASE : ZONE_A_BASE;
             end
 
             // INSERT: write to standby zone tail, increment
