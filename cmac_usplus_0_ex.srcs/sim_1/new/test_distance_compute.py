@@ -37,15 +37,15 @@ async def run_distance_test(dut, a, b, dim, metric, expected):
     dut.i_dim.value = dim
     dut.i_metric.value = metric
     dut.i_start.value = 1
-    dut.i_vec_a_tdata.value = pack_16_ints(a_fixed[0:16])
-    dut.i_vec_a_tvalid.value = 1
-    dut.i_vec_b_tdata.value = pack_16_ints(b_fixed[0:16])
-    dut.i_vec_b_tvalid.value = 1
+    dut.i_vec_a_tvalid.value = 0
+    dut.i_vec_b_tvalid.value = 0
 
+    # Cycle 0: state transitions IDLE->COMPUTE (no data captured yet)
     await RisingEdge(dut.clk)
     dut.i_start.value = 0
 
-    for chunk in range(1, num_chunks):
+    # Feed all data chunks while in COMPUTE state
+    for chunk in range(num_chunks):
         start = chunk * 16
         end = start + 16
         chunk_a = np.zeros(16, dtype=np.int64)
@@ -54,7 +54,9 @@ async def run_distance_test(dut, a, b, dim, metric, expected):
         chunk_a[:count] = a_fixed[start:start + count]
         chunk_b[:count] = b_fixed[start:start + count]
         dut.i_vec_a_tdata.value = pack_16_ints(chunk_a)
+        dut.i_vec_a_tvalid.value = 1
         dut.i_vec_b_tdata.value = pack_16_ints(chunk_b)
+        dut.i_vec_b_tvalid.value = 1
         await RisingEdge(dut.clk)
 
     dut.i_vec_a_tvalid.value = 0

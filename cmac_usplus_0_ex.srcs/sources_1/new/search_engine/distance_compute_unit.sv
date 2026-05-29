@@ -26,6 +26,7 @@ module distance_compute_unit #(
     reg [10:0] dim_cnt;
     reg [63:0] accum;          // 64-bit internal accumulator
     reg [31:0] result_reg;
+    reg        o_valid_reg;
 
     // Unpack 512b into 16 x 32b
     wire signed [31:0] a_val [16];
@@ -38,14 +39,18 @@ module distance_compute_unit #(
         end
     endgenerate
 
-    // Pipeline registers: stage1 = subtraction, stage2 = multiply, stage3 = pairwise add
-    reg signed [31:0] s1_diff [16];
-    reg signed [31:0] s2_prod [16];
-    reg signed [31:0] s3_sum  [8];
-    reg signed [31:0] s4_sum  [4];
-    reg signed [31:0] s5_sum  [2];
-    reg signed [31:0] s6_total;
-    reg         pipe_valid [7];  // valid bit per pipeline stage
+    // Pipeline registers
+    reg signed [31:0] s1_a    [16];   // stage 0: registered a_val
+    reg signed [31:0] s1_b    [16];   // stage 0: registered b_val
+    reg signed [31:0] s2_prod [16];   // stage 1: multiply result
+    reg signed [31:0] s3_sum  [8];    // stage 2: 16→8 adder
+    reg signed [31:0] s4_sum  [4];    // stage 3: 8→4 adder
+    reg signed [31:0] s5_sum  [2];    // stage 4: 4→2 adder
+    reg signed [31:0] s6_total;       // stage 5: 2→1 adder
+    reg         pipe_valid [7];       // valid bit per pipeline stage
+
+    // Combinational: is valid data entering the pipeline RIGHT NOW?
+    wire pipe_in = (state == STCOMPUTE) && i_vec_a_tvalid && i_vec_b_tvalid;
 
     integer i;
     always @(posedge clk) begin
@@ -54,10 +59,11 @@ module distance_compute_unit #(
             dim_cnt <= 0;
             accum <= 0;
             result_reg <= 0;
+            o_valid_reg <= 0;
             for (i = 0; i < 7; i = i + 1) pipe_valid[i] <= 0;
         end else begin
-            // Pipeline shift
-            pipe_valid[0] <= (state == STCOMPUTE) && i_vec_a_tvalid && i_vec_b_tvalid;
+            // Pipeline shift: stage 0 uses combinational pipe_in for data capture
+            pipe_valid[0] <= pipe_in;
             pipe_valid[1] <= pipe_valid[0];
             pipe_valid[2] <= pipe_valid[1];
             pipe_valid[3] <= pipe_valid[2];
@@ -65,23 +71,24 @@ module distance_compute_unit #(
             pipe_valid[5] <= pipe_valid[4];
             pipe_valid[6] <= pipe_valid[5];
 
-            // Stage 0: subtraction
-            if (pipe_valid[0]) begin
+            // Stage 0: register a_val and b_val (use combinational pipe_in)
+            if (pipe_in) begin
                 for (i = 0; i < 16; i = i + 1) begin
-                    if (dim_cnt * 16 + i < i_dim)
-                        s1_diff[i] <= a_val[i] - b_val[i];
-                    else
-                        s1_diff[i] <= 0;
+                    s1_a[i] <= a_val[i];
+                    s1_b[i] <= b_val[i];
                 end
             end
 
-            // Stage 1: multiply
+            // Stage 1: compute diff^2 (L2/cosine) or a*b (IP)
             if (pipe_valid[1]) begin
                 for (i = 0; i < 16; i = i + 1) begin
-                    if (i_metric == 2'b10)  // IP: just multiply
-                        s2_prod[i] <= ($signed(s1_diff[i]) * $signed({32'd0})) >>> 16;
-                    else  // L2/Cosine: square the diff
-                        s2_prod[i] <= ($signed(s1_diff[i]) * $signed(s1_diff[i])) >>> 16;
+                    if (i_metric == 2'b10)  // IP: a * b
+                        s2_prod[i] <= (($signed(s1_a[i]) * $signed(s1_b[i])) >>> 16);
+                    else begin  // L2/Cosine: (a-b)^2
+                        reg signed [63:0] diff64;
+                        diff64 = $signed(s1_a[i]) - $signed(s1_b[i]);
+                        s2_prod[i] <= ((diff64 * diff64) >>> 16);
+                    end
                 end
             end
 
@@ -114,6 +121,7 @@ module distance_compute_unit #(
             // State machine
             case (state)
                 STIDLE: begin
+                    o_valid_reg <= 1'b0;
                     if (i_start) begin
                         state <= STCOMPUTE;
                         dim_cnt <= 0;
@@ -136,7 +144,8 @@ module distance_compute_unit #(
                 end
 
                 STDONE: begin
-                    result_reg <= accum[47:16];  // scale back to Q16.16
+                    result_reg <= accum[31:0];   // extract Q16.16 result
+                    o_valid_reg <= 1'b1;
                     state <= STIDLE;
                 end
                 default: ;
@@ -144,7 +153,7 @@ module distance_compute_unit #(
         end
     end
 
-    assign o_valid = (state == STDONE);
+    assign o_valid = o_valid_reg;
     assign o_distance = result_reg;
     assign o_vec_a_tready = (state == STCOMPUTE);
     assign o_vec_b_tready = (state == STCOMPUTE);
